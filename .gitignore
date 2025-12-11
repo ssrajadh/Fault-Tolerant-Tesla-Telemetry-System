@@ -1,2 +1,7 @@
 config.py
 cache.json
+logs/
+__pycache__/
+python_cloud/telemetry*
+cpp_edge/telemetry.pb*
+cpp_edge/logger

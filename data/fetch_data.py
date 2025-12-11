@@ -1,91 +1,70 @@
 import teslapy
-import csv
+import json
 import time
-import os
+from datetime import datetime
+import config
+from requests.exceptions import HTTPError
 
 # CONFIGURATION
-# Replace with your actual Tesla account email
-EMAIL = 'your_email@example.com'
-LOG_FILE = 'drive_log.csv'
+EMAIL = config.EMAIL
+LOG_FILE = 'tesla_raw_log.jsonl' # JSON Lines format (one JSON object per line)
+MAX_RETRIES = 3
+RETRY_DELAY = 5  # seconds
 
 def main():
-    print("Authenticating with Tesla...")
-    
-    # 1. Connect to Tesla Cloud
-    # On first run, this will print a URL. Click it, login, and paste the "Page Not Found" URL back here.
+    print("Authenticating...")
     with teslapy.Tesla(EMAIL) as tesla:
         if not tesla.authorized:
-            print("Please authorize in the browser...")
+            print("Please authorize...")
             tesla.refresh_token(refresh_token=None)
         
-        # 2. Select Vehicle
-        vehicles = tesla.vehicle_list()
-        if not vehicles:
-            print("Error: No vehicles found!")
-            return
-
-        vehicle = vehicles[0]
+        vehicle = tesla.vehicle_list()[0]
         print(f"Connected to: {vehicle['display_name']}")
         
-        # 3. Wake Up (if asleep)
         if vehicle['state'] != 'online':
-            print("Waking up vehicle... (This may take 30 seconds)")
+            print("Waking up...")
             vehicle.sync_wake_up()
-            print("Vehicle is Online!")
 
-        print(f"Logging telemetry to {LOG_FILE}... Press Ctrl+C to stop.")
+        print(f"Logging RAW data to {LOG_FILE}... Press Ctrl+C to stop.")
         
-        # 4. Initialize CSV File
-        # We use 'w' (write) mode. If you want to append to an existing file, use 'a'.
-        with open(LOG_FILE, 'w', newline='') as f:
-            writer = csv.writer(f)
-            # Header Row
-            writer.writerow(['timestamp', 'speed', 'battery', 'power', 'gear', 'inside_temp', 'lat', 'lon'])
-            
+        with open(LOG_FILE, 'a') as f: # Append mode
             try:
                 while True:
-                    # 5. Fetch Data from API
-                    # Note: We fetch 'vehicle_data' which contains everything
-                    data = vehicle.get_vehicle_data()
+                    # Retry logic for fetching data
+                    for attempt in range(MAX_RETRIES):
+                        try:
+                            # 1. Fetch EVERYTHING
+                            vehicle_data = vehicle.get_vehicle_data()
+                            
+                            # 2. Add a local timestamp (for your own debugging)
+                            vehicle_data['local_timestamp'] = datetime.now().isoformat()
+                            
+                            # 3. Write the full JSON object as one line
+                            f.write(json.dumps(vehicle_data) + "\n")
+                            f.flush()
+                            
+                            # Console feedback (just so you know it's working)
+                            speed = vehicle_data['drive_state'].get('speed', 0)
+                            print(f"Logged raw packet. Speed: {speed}")
+                            break  # Success, exit retry loop
+                            
+                        except HTTPError as e:
+                            if '408' in str(e) or 'timeout' in str(e).lower():
+                                print(f"Timeout (attempt {attempt + 1}/{MAX_RETRIES}). Retrying...")
+                                if attempt < MAX_RETRIES - 1:
+                                    time.sleep(RETRY_DELAY)
+                                else:
+                                    print("Max retries reached. Skipping this data point.")
+                            else:
+                                raise  # Re-raise non-timeout errors
+                        except Exception as e:
+                            print(f"Error fetching data: {e}")
+                            break  # Skip this iteration
                     
-                    drive = data['drive_state']
-                    charge = data['charge_state']
-                    climate = data['climate_state']
-                    
-                    # 6. Extract Specific Metrics
-                    ts = int(time.time() * 1000) # Current time in ms
-                    
-                    # Speed can be None if stopped, so default to 0
-                    speed = drive.get('speed') if drive.get('speed') is not None else 0
-                    
-                    battery = charge.get('battery_level', 0)
-                    
-                    # Power: Positive = Discharge, Negative = Regen
-                    power = drive.get('power', 0) 
-                    
-                    gear = drive.get('shift_state', 'P') # P, D, R, N
-                    if gear is None: gear = "P" # Default to Park if null
-                    
-                    temp = climate.get('inside_temp', 0)
-                    
-                    lat = drive.get('latitude', 0)
-                    lon = drive.get('longitude', 0)
-
-                    # 7. Write to CSV
-                    row = [ts, speed, battery, power, gear, temp, lat, lon]
-                    writer.writerow(row)
-                    f.flush() # Ensure data hits the disk immediately
-                    
-                    # Console Feedback
-                    print(f"Logged: {speed} mph | {power} kW | Gear: {gear}")
-                    
-                    # 8. Rate Limit (2 seconds is safe for free tier)
-                    time.sleep(2.0) 
+                    time.sleep(2) # 2s poll rate
                     
             except KeyboardInterrupt:
-                print("\nLogging stopped. CSV saved safely.")
-            except Exception as e:
-                print(f"\nError: {e}")
+                print("\nStopped. Raw data saved.")
 
 if __name__ == "__main__":
     main()

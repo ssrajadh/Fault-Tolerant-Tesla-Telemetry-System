@@ -2,10 +2,11 @@ syntax = "proto3";
 package tesla;
 
 message VehicleData {
-  int64 timestamp = 1;      // Unix Epoch in ms
+  int64 timestamp = 1;      // ms
   float vehicle_speed = 2;  // mph
   float battery_level = 3;  // %
-  float power_kw = 4;
+  string gear = 4;          // "D", "P", "R"
+  float power_kw = 5;       // kW
 }
 
 message TelemetryBatch {

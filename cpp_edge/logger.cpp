@@ -1,54 +1,82 @@
-// cpp_edge/logger.cpp (Part 1 - Setup)
 #include <iostream>
 #include <fstream>
-#include <sstream>
+#include <string>
 #include <vector>
-#include <thread>
-#include "telemetry.pb.h" // Generated file
-#include <sqlite3.h>
-#include <curl/curl.h>
+#include <nlohmann/json.hpp>
 
-struct Point { long ts; float speed; float bat; float lat; float lon; };
-
-std::vector<Point> load_csv(std::string filename) {
-    std::vector<Point> data;
-    std::ifstream file(filename);
-    std::string line, val;
-    std::getline(file, line); // Skip header
-
-    while(std::getline(file, line)) {
-        std::stringstream ss(line);
-        Point p;
-        // Parse CSV logic here... (Simplified for brevity)
-        data.push_back(p); 
-    }
-    return data;
-}
-
-void write_to_sqlite(sqlite3* db, const tesla::VehicleData& data) {
-    std::string bin;
-    data.SerializeToString(&bin); // Convert to binary via Protobuf
-    
-    sqlite3_stmt* stmt;
-    const char* sql = "INSERT INTO buffer (payload, created_at) VALUES (?, ?)";
-    sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
-    sqlite3_bind_blob(stmt, 1, bin.data(), bin.size(), SQLITE_STATIC);
-    sqlite3_bind_int64(stmt, 2, data.timestamp());
-    sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
-    std::cout << "[DISK] Buffered frame to SQLite" << std::endl;
-}
-
-bool upload_data(const tesla::TelemetryBatch& batch) {
-    // Standard libcurl POST request setup...
-    // Returns true if HTTP 200, false if connection refused
-}
+// Use the nlohmann namespace for convenience
+using json = nlohmann::json;
 
 int main() {
-    auto track = load_csv("../data/drive_log.csv");
-    for (const auto& p : track) {
-        std::cout << "Replaying: " << p.speed << "mph" << std::endl;
-        std::this_thread::sleep_for(std::chrono::milliseconds(50)); // 50Hz Sim
+    // 1. Open the JSONL file
+    std::string filename = "../logs/tesla_raw_log.jsonl";
+    std::ifstream file(filename);
+
+    if (!file.is_open()) {
+        std::cerr << "Error: Could not open file " << filename << std::endl;
+        return 1;
     }
+
+    std::string line;
+    int line_count = 0;
+
+    std::cout << "Starting 'Dumb' Replay of Tesla Data..." << std::endl;
+
+    // 2. Read line by line
+    while (std::getline(file, line)) {
+        try {
+            // 3. Parse the JSON line
+            auto data = json::parse(line);
+
+            // 4. Extract Fields (safely)
+
+            // Timestamp (from drive_state -> timestamp)
+            int64_t timestamp = 0LL;
+            if (data.contains("drive_state") && !data["drive_state"].is_null()) {
+                timestamp = data["drive_state"].value("timestamp", 0LL);
+            }
+
+            // Speed (drive_state -> speed)
+            // Speed can be null in the JSON if stopped, so we handle that
+            float speed = 0.0f;
+            if (data.contains("drive_state") && !data["drive_state"].is_null() && !data["drive_state"]["speed"].is_null()) {
+                speed = data["drive_state"].value("speed", 0.0f);
+            }
+
+            // Battery (charge_state -> battery_level)
+            int battery = 0;
+            if (data.contains("charge_state") && !data["charge_state"].is_null()) {
+                battery = data["charge_state"].value("battery_level", 0);
+            }
+
+            // Power (drive_state -> power)
+            float power = 0.0f;
+             if (data.contains("drive_state") && !data["drive_state"].is_null()) {
+                power = data["drive_state"].value("power", 0.0f);
+            }
+
+            // Gear (drive_state -> shift_state) - can be null
+            std::string gear = "P"; // Default to Park
+            if (data.contains("drive_state") && !data["drive_state"].is_null() && !data["drive_state"]["shift_state"].is_null()) {
+                gear = data["drive_state"].value("shift_state", "P");
+            }
+
+            // 5. Print to Console
+            std::cout << "Line " << line_count++ << " | "
+                      << "Time: " << timestamp << " | "
+                      << "Speed: " << speed << " mph | "
+                      << "Bat: " << battery << "% | "
+                      << "Pwr: " << power << " kW | "
+                      << "Gear: " << gear << " | "
+                      << std::endl;
+
+        } catch (json::parse_error& e) {
+            std::cerr << "JSON Parse Error on line " << line_count << ": " << e.what() << std::endl;
+        } catch (std::exception& e) {
+            std::cerr << "General Error: " << e.what() << std::endl;
+        }
+    }
+
+    std::cout << "Replay Finished." << std::endl;
     return 0;
 }
