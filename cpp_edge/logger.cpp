@@ -5,11 +5,20 @@
 #include <thread>
 #include <atomic>
 #include <chrono>
+#include <curl/curl.h>
 #include <nlohmann/json.hpp>
 #include <sqlite3.h>
 #include "telemetry.pb.h"
 
 using json = nlohmann::json;
+
+// Server configuration
+const char* SERVER_URL = "http://localhost:8000/telemetry";
+
+// Callback for curl to handle response (we ignore it)
+size_t write_callback(void* contents, size_t size, size_t nmemb, void* userp) {
+    return size * nmemb;
+}
 
 // Global flag for online/offline status
 std::atomic<bool> is_online(true);
@@ -81,15 +90,44 @@ bool storeToBuffer(sqlite3* db, int64_t timestamp, const std::string& protobuf_d
     return true;
 }
 
-// Simulate uploading data to cloud
-void simulateUpload(const tesla::VehicleData& data) {
-    std::cout << "[UPLOAD] Sending to cloud: "
-              << "Time=" << data.timestamp() 
-              << ", Speed=" << data.vehicle_speed() << " mph"
-              << ", Battery=" << data.battery_level() << "%"
-              << ", Power=" << data.power_kw() << " kW"
-              << ", Gear=" << data.gear()
-              << std::endl;
+// Upload data to server via HTTP POST
+bool uploadToServer(const std::string& serialized_data, const tesla::VehicleData& data) {
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        std::cerr << "[UPLOAD ERROR] Failed to initialize curl" << std::endl;
+        return false;
+    }
+    
+    struct curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, "Content-Type: application/octet-stream");
+    
+    curl_easy_setopt(curl, CURLOPT_URL, SERVER_URL);
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, serialized_data.c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, serialized_data.size());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+    
+    CURLcode res = curl_easy_perform(curl);
+    
+    bool success = (res == CURLE_OK);
+    if (success) {
+        std::cout << "[UPLOAD] ✓ Sent to server: "
+                  << "Time=" << data.timestamp() 
+                  << ", Speed=" << data.vehicle_speed() << " mph"
+                  << ", Battery=" << data.battery_level() << "%"
+                  << ", Power=" << data.power_kw() << " kW"
+                  << ", Gear=" << data.gear()
+                  << std::endl;
+    } else {
+        std::cerr << "[UPLOAD ERROR] Failed: " << curl_easy_strerror(res) << std::endl;
+    }
+    
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    
+    return success;
 }
 
 // Flush buffered data when back online
@@ -104,6 +142,7 @@ void flushBuffer(sqlite3* db) {
     }
     
     int count = 0;
+    int failed = 0;
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         int id = sqlite3_column_int(stmt, 0);
         const void* blob = sqlite3_column_blob(stmt, 2);
@@ -112,23 +151,36 @@ void flushBuffer(sqlite3* db) {
         // Deserialize protobuf
         tesla::VehicleData data;
         if (data.ParseFromArray(blob, blob_size)) {
-            simulateUpload(data);
-            count++;
+            std::string serialized_data((const char*)blob, blob_size);
+            
+            // Try to upload
+            if (uploadToServer(serialized_data, data)) {
+                // Delete from buffer after successful upload
+                std::string delete_sql = "DELETE FROM telemetry_buffer WHERE id = " + std::to_string(id) + ";";
+                sqlite3_exec(db, delete_sql.c_str(), nullptr, nullptr, nullptr);
+                count++;
+            } else {
+                failed++;
+                // Keep in buffer if upload fails
+            }
         }
-        
-        // Delete from buffer after upload
-        std::string delete_sql = "DELETE FROM telemetry_buffer WHERE id = " + std::to_string(id) + ";";
-        sqlite3_exec(db, delete_sql.c_str(), nullptr, nullptr, nullptr);
     }
     
     sqlite3_finalize(stmt);
     
     if (count > 0) {
-        std::cout << "[FLUSH] Successfully uploaded " << count << " buffered records" << std::endl;
+        std::cout << "[FLUSH] Successfully uploaded " << count << " buffered records";
+        if (failed > 0) {
+            std::cout << " (" << failed << " failed, kept in buffer)";
+        }
+        std::cout << std::endl;
     }
 }
 
 int main() {
+    // Initialize curl globally
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+    
     // Verify that the version of the library that we linked against is
     // compatible with the version of the headers we compiled against.
     GOOGLE_PROTOBUF_VERIFY_VERSION;
@@ -217,7 +269,11 @@ int main() {
                 }
                 
                 // Upload directly
-                simulateUpload(vehicle_data);
+                if (!uploadToServer(serialized_data, vehicle_data)) {
+                    // If upload fails, buffer it
+                    std::cout << "[FALLBACK] Upload failed, buffering..." << std::endl;
+                    storeToBuffer(db, timestamp, serialized_data);
+                }
             } else {
                 // Store to buffer
                 if (storeToBuffer(db, timestamp, serialized_data)) {
@@ -251,6 +307,7 @@ int main() {
     sqlite3_close(db);
     file.close();
     google::protobuf::ShutdownProtobufLibrary();
+    curl_global_cleanup();
     
     return 0;
 }
