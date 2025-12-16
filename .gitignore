@@ -6,3 +6,25 @@ python_cloud/telemetry*
 cpp_edge/telemetry*
 cpp_edge/logger
 notes.md
+
+# React frontend_dashboard
+frontend_dashboard/node_modules
+frontend_dashboard/.pnp
+frontend_dashboard/.pnp.js
+
+# testing
+frontend_dashboard/coverage
+
+# production
+frontend_dashboard/build
+
+# misc
+frontend_dashboard/.DS_Store
+frontend_dashboard/.env.local
+frontend_dashboard/.env.development.local
+frontend_dashboard/.env.test.local
+frontend_dashboard/.env.production.local
+
+frontend_dashboard/npm-debug.log*
+frontend_dashboard/yarn-debug.log*
+frontend_dashboard/yarn-error.log*
