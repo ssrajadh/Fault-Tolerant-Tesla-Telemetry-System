@@ -119,6 +119,8 @@ bool uploadToServer(const std::string& serialized_data, const tesla::VehicleData
                   << ", Battery=" << data.battery_level() << "%"
                   << ", Power=" << data.power_kw() << " kW"
                   << ", Gear=" << data.gear()
+                  << ", Odometer=" << data.odometer() << " mi"
+                  << ", Heading=" << data.heading() << "°"
                   << std::endl;
     } else {
         std::cerr << "[UPLOAD ERROR] Failed: " << curl_easy_strerror(res) << std::endl;
@@ -247,6 +249,20 @@ int main() {
                 gear = json_data["drive_state"].value("shift_state", "P");
             }
             
+            float odometer = 0.0f;
+            if (json_data.contains("vehicle_state") && !json_data["vehicle_state"].is_null() 
+                && json_data["vehicle_state"].contains("odometer") 
+                && !json_data["vehicle_state"]["odometer"].is_null()) {
+                odometer = json_data["vehicle_state"]["odometer"].get<float>();
+            }
+            
+            int heading = 0;
+            if (json_data.contains("drive_state") && !json_data["drive_state"].is_null() 
+                && json_data["drive_state"].contains("heading") 
+                && !json_data["drive_state"]["heading"].is_null()) {
+                heading = json_data["drive_state"]["heading"].get<int>();
+            }
+            
             // Create Protobuf message
             tesla::VehicleData vehicle_data;
             vehicle_data.set_timestamp(timestamp);
@@ -254,6 +270,8 @@ int main() {
             vehicle_data.set_battery_level(battery);
             vehicle_data.set_power_kw(power);
             vehicle_data.set_gear(gear);
+            vehicle_data.set_odometer(odometer);
+            vehicle_data.set_heading(heading);
             
             // Serialize to binary
             std::string serialized_data;

@@ -5,8 +5,15 @@ import telemetry_pb2  # Generated protobuf file
 import json
 from datetime import datetime
 import uvicorn
+import subprocess
+import asyncio
+import os
 
 app = FastAPI()
+
+# Global script process
+script_process = None
+script_task = None
 
 # Enable CORS for React
 app.add_middleware(
@@ -48,6 +55,28 @@ class ConnectionManager:
         # Clean up dead connections
         for conn in dead_connections:
             self.active_connections.remove(conn)
+    
+    async def broadcast_log(self, message: str, log_type: str = "info"):
+        """Broadcast log message to all connected clients"""
+        await self.broadcast({
+            "type": "log",
+            "message": message,
+            "log_type": log_type
+        })
+
+
+async def stream_script_output():
+    """Stream script output to WebSocket clients"""
+    global script_process
+    
+    if script_process and script_process.stdout:
+        try:
+            async for line in script_process.stdout:
+                decoded_line = line.decode('utf-8').strip()
+                if decoded_line:
+                    await manager.broadcast_log(decoded_line, "info")
+        except Exception as e:
+            await manager.broadcast_log(f"Error reading script output: {e}", "error")
 
 
 manager = ConnectionManager()
@@ -71,6 +100,8 @@ async def receive_telemetry(request: Request):
             "battery": vehicle_data.battery_level,
             "power": vehicle_data.power_kw,
             "gear": vehicle_data.gear,
+            "odometer": vehicle_data.odometer,
+            "heading": vehicle_data.heading,
             "received_at": datetime.now().isoformat()
         }
         
@@ -85,6 +116,12 @@ async def receive_telemetry(request: Request):
             "data": telemetry_dict
         })
         
+        # Send log message
+        await manager.broadcast_log(
+            f"[UPLOAD] ✓ Received from edge: Speed={vehicle_data.vehicle_speed} mph, Battery={vehicle_data.battery_level}%, Power={vehicle_data.power_kw} kW",
+            "success"
+        )
+        
         print(f"[RECV] Time={vehicle_data.timestamp}, Speed={vehicle_data.vehicle_speed} mph, "
               f"Battery={vehicle_data.battery_level}%, Power={vehicle_data.power_kw} kW, Gear={vehicle_data.gear}")
         
@@ -92,6 +129,7 @@ async def receive_telemetry(request: Request):
         
     except Exception as e:
         print(f"[ERROR] Failed to process telemetry: {e}")
+        await manager.broadcast_log(f"[ERROR] Failed to process telemetry: {e}", "error")
         return {"status": "error", "message": str(e)}
 
 
@@ -101,10 +139,23 @@ async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     
     try:
+        # Send initial log messages
+        await websocket.send_json({
+            "type": "log",
+            "message": "Connected to telemetry server",
+            "log_type": "success"
+        })
+        
         # Send historical data on connect
         await websocket.send_json({
             "type": "history",
             "data": telemetry_buffer[-100:] if len(telemetry_buffer) > 100 else telemetry_buffer
+        })
+        
+        await websocket.send_json({
+            "type": "log",
+            "message": f"Loaded {min(len(telemetry_buffer), 100)} historical telemetry records",
+            "log_type": "info"
         })
         
         # Keep connection alive
@@ -137,8 +188,86 @@ async def status():
     return {
         "total_records": len(telemetry_buffer),
         "active_websockets": len(manager.active_connections),
-        "latest": telemetry_buffer[-10:] if telemetry_buffer else []
+        "latest": telemetry_buffer[-10:] if telemetry_buffer else [],
+        "script_running": script_process is not None and script_process.returncode is None
     }
+
+
+@app.post("/start_script")
+async def start_script():
+    """Start the C++ logger script"""
+    global script_process, script_task
+    
+    if script_process and script_process.returncode is None:
+        return {"status": "error", "message": "Script already running"}
+    
+    try:
+        # Path to the logger executable
+        logger_path = os.path.join(os.path.dirname(__file__), "..", "cpp_edge", "logger")
+        
+        if not os.path.exists(logger_path):
+            await manager.broadcast_log("Logger executable not found. Compile it first with: g++ -o logger logger.cpp telemetry.pb.cc -lprotobuf -lcurl", "error")
+            return {"status": "error", "message": "Logger not found"}
+        
+        # Start the process
+        script_process = await asyncio.create_subprocess_exec(
+            logger_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=os.path.dirname(logger_path)
+        )
+        
+        # Start streaming output
+        script_task = asyncio.create_task(stream_script_output())
+        
+        await manager.broadcast_log("=== Logger Started ===", "success")
+        return {"status": "success", "message": "Script started"}
+        
+    except Exception as e:
+        await manager.broadcast_log(f"Failed to start script: {e}", "error")
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/stop_script")
+async def stop_script():
+    """Stop the C++ logger script"""
+    global script_process, script_task
+    
+    if not script_process or script_process.returncode is not None:
+        return {"status": "error", "message": "Script not running"}
+    
+    try:
+        script_process.terminate()
+        await asyncio.sleep(0.5)
+        
+        if script_process.returncode is None:
+            script_process.kill()
+        
+        if script_task:
+            script_task.cancel()
+            script_task = None
+        
+        script_process = None
+        await manager.broadcast_log("=== Logger Stopped ===", "warning")
+        return {"status": "success", "message": "Script stopped"}
+        
+    except Exception as e:
+        await manager.broadcast_log(f"Failed to stop script: {e}", "error")
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/clear_data")
+async def clear_data():
+    """Clear all telemetry data"""
+    global telemetry_buffer
+    
+    try:
+        telemetry_buffer.clear()
+        await manager.broadcast_log("=== Data Cleared ===", "info")
+        return {"status": "success", "message": "Data cleared", "records_cleared": 0}
+    except Exception as e:
+        await manager.broadcast_log(f"Failed to clear data: {e}", "error")
+        return {"status": "error", "message": str(e)}
 
 
 if __name__ == "__main__":

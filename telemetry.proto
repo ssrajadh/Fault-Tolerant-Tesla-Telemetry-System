@@ -7,6 +7,8 @@ message VehicleData {
   float battery_level = 3;  // %
   string gear = 4;          // "D", "P", "R"
   float power_kw = 5;       // kW
+  float odometer = 6;       // miles
+  int32 heading = 7;        // degrees (0-360)
 }
 
 message TelemetryBatch {

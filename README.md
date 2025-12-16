@@ -28,5 +28,16 @@ graph LR
 * **Edge Logic:** C++17 (Thread-safe ring buffer, fstreams)
 * **Serialization:** Protocol Buffers (Google Protobuf)
 * **Persistence:** SQLite (WAL mode for concurrent writes)
-* **Backend:** Python (FastAPI)
+* **Backend:** Python (FastAPI with WebSocket support)
+* **Frontend:** React 18 + TypeScript (Real-time dashboard with Recharts)
 * **Simulation:** Hardware-in-the-loop replay using real Tesla Model 3 drive logs.
+
+## Features
+
+### Real-Time Dashboard
+- **Interactive Terminal**: Built-in logger control with play/stop button - no need to run scripts separately
+- **Live Telemetry Charts**: Speed, distance traveled, and power usage visualization
+- **WebSocket Streaming**: Real-time data updates from the server
+- **Press Enter**: Quick disconnect from the terminal view
+- **Responsive Grid Layout**: Desktop and mobile-friendly interface
+
