@@ -38,6 +38,46 @@
   text-align: center;
 }
 
+.header-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin-bottom: 1rem;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.social-link {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.15);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  text-decoration: none;
+}
+
+.social-link:hover {
+  background: rgba(255, 255, 255, 0.25);
+  border-color: rgba(255, 255, 255, 0.5);
+  transform: scale(1.1);
+}
+
+.social-link svg {
+  width: 18px;
+  height: 18px;
+}
+
 .help-button {
   width: 32px;
   height: 32px;
@@ -330,10 +370,43 @@
   padding: 8px 16px;
   background: #252525;
   border-top: 1px solid #3e3e3e;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
   font-size: 12px;
   color: #888;
   font-style: italic;
+}
+
+.terminal-footer-text {
+  flex: 1;
+  text-align: center;
+}
+
+.mobile-toggle-button {
+  display: none; /* Hidden by default on desktop */
+  padding: 6px 12px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: none;
+  border-radius: 6px;
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.mobile-toggle-button:hover:not(:disabled) {
+  transform: scale(1.05);
+  box-shadow: 0 4px 8px rgba(102, 126, 234, 0.4);
+}
+
+.mobile-toggle-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Current Values styling */
@@ -445,6 +518,20 @@
 
   .grid-item {
     min-height: 350px;
+  }
+
+  /* Show mobile toggle button and adjust terminal footer layout */
+  .mobile-toggle-button {
+    display: block;
+  }
+
+  .terminal-footer {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .terminal-footer-text {
+    display: none; /* Hide "Press Enter" text on mobile */
   }
 
   .chart-container > div {

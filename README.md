@@ -1,6 +1,6 @@
 # Fault-Tolerant Tesla Telemetry Logger
 
-> **Status:** In Development (Prototype Phase)
+> **Status:** MVP done
 
 A high-performance C++ telemetry engine designed to capture, buffer, and synchronize vehicle data (Tesla Model 3) during intermittent network connectivity. Unlike standard cloud-based loggers that lose data in tunnels or rural dead zones, this logger utilizes a **Store-and-Forward** architecture to ensure 100% data continuity.
 
