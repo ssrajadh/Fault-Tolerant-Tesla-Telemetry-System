@@ -4,9 +4,8 @@ __pycache__
 *.pyc
 .git
 .gitignore
-README.md
 .vscode
-*.db
 telemetry_buffer.db
 frontend_dashboard/node_modules
 frontend_dashboard/build
+venv/

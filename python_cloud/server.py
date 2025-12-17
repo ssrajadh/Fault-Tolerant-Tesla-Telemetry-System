@@ -215,12 +215,17 @@ async def start_script():
             return {"status": "error", "message": "Logger not found"}
         
         # Start the process with unbuffered output
+        # Set SERVER_PORT env var so logger knows which port to use
+        env = os.environ.copy()
+        env['SERVER_PORT'] = str(int(os.environ.get("PORT", 8000)))
+        
         script_process = await asyncio.create_subprocess_exec(
             "stdbuf", "-oL", "-eL", logger_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             stdin=asyncio.subprocess.PIPE,
             cwd=os.path.dirname(logger_path),
+            env=env,
             bufsize=0
         )
         

@@ -39,7 +39,7 @@ RUN cd cpp_edge && \
     g++ -std=c++17 -o logger logger.cpp telemetry.pb.cc \
     -lprotobuf -lcurl -lsqlite3
 
-# Copy data files
+# Copy data files (includes Tesla logs)
 COPY data/ ./data/
 
 # Expose port 8080 for Cloud Run

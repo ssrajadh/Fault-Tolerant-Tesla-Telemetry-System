@@ -12,8 +12,14 @@
 
 using json = nlohmann::json;
 
-// Server configuration
-const char* SERVER_URL = "http://localhost:8000/telemetry";
+// Server configuration - use environment variable if set, otherwise default to 8000
+std::string getServerUrl() {
+    const char* port_env = std::getenv("SERVER_PORT");
+    std::string port = port_env ? port_env : "8000";
+    return "http://localhost:" + port + "/telemetry";
+}
+
+const std::string SERVER_URL = getServerUrl();
 
 // Callback for curl to handle response (we ignore it)
 size_t write_callback(void* contents, size_t size, size_t nmemb, void* userp) {
@@ -101,7 +107,7 @@ bool uploadToServer(const std::string& serialized_data, const tesla::VehicleData
     struct curl_slist* headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/octet-stream");
     
-    curl_easy_setopt(curl, CURLOPT_URL, SERVER_URL);
+    curl_easy_setopt(curl, CURLOPT_URL, SERVER_URL.c_str());
     curl_easy_setopt(curl, CURLOPT_POST, 1L);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, serialized_data.c_str());
     curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, serialized_data.size());
@@ -202,11 +208,28 @@ int main() {
     std::cout << "Current Status: " << (is_online ? "ONLINE" : "OFFLINE") << "\n" << std::endl;
     
     // Open JSONL file (simulating CAN bus)
-    std::string filename = "../logs/tesla_raw_log.jsonl";
-    std::ifstream file(filename);
+    // Check multiple possible paths (local dev vs Docker container)
+    std::vector<std::string> possible_paths = {
+        "../logs/tesla_raw_log.jsonl",  // Local development from cpp_edge/
+        "/app/logs/tesla_raw_log.jsonl",  // Docker container
+        "../data/tesla_raw_log.jsonl"   // Alternative location
+    };
+    
+    std::string filename;
+    std::ifstream file;
+    for (const auto& path : possible_paths) {
+        file.open(path);
+        if (file.is_open()) {
+            filename = path;
+            break;
+        }
+    }
     
     if (!file.is_open()) {
-        std::cerr << "Error: Could not open file " << filename << std::endl;
+        std::cerr << "Error: Could not open Tesla log file in any of these locations:" << std::endl;
+        for (const auto& path : possible_paths) {
+            std::cerr << "  - " << path << std::endl;
+        }
         sqlite3_close(db);
         return 1;
     }
