@@ -27,6 +27,10 @@ interface WebSocketMessage {
 }
 
 function App() {
+  // Backend URL from environment variable (localhost for dev, Cloud Run for production)
+  const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000';
+  const WS_URL = BACKEND_URL.replace('https://', 'wss://').replace('http://', 'ws://');
+
   const [telemetryData, setTelemetryData] = useState<TelemetryData[]>([]);
   const [logs, setLogs] = useState<LogMessage[]>([]);
   const [isConnected, setIsConnected] = useState(false);
@@ -61,7 +65,7 @@ function App() {
       wsRef.current.close();
     }
 
-    const ws = new WebSocket('ws://localhost:8000/ws');
+    const ws = new WebSocket(`${WS_URL}/ws`);
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -123,7 +127,7 @@ function App() {
       e.preventDefault();
       e.stopPropagation();
       // Send Enter to C++ logger to toggle offline/online
-      fetch('http://localhost:8000/toggle_offline', { method: 'POST' })
+      fetch(`${BACKEND_URL}/toggle_offline`, { method: 'POST' })
         .then(res => res.json())
         .then(data => {
           if (data.status === 'success') {
@@ -142,8 +146,8 @@ function App() {
     if (isScriptRunning) {
       // Stop script and clear data
       try {
-        await fetch('http://localhost:8000/stop_script', { method: 'POST' });
-        await fetch('http://localhost:8000/clear_data', { method: 'POST' });
+        await fetch(`${BACKEND_URL}/stop_script`, { method: 'POST' });
+        await fetch(`${BACKEND_URL}/clear_data`, { method: 'POST' });
         setIsScriptRunning(false);
         setTelemetryData([]);
         setInitialOdometer(null);
@@ -155,7 +159,7 @@ function App() {
     } else {
       // Start script
       try {
-        const response = await fetch('http://localhost:8000/start_script', { method: 'POST' });
+        const response = await fetch(`${BACKEND_URL}/start_script`, { method: 'POST' });
         if (response.ok) {
           setIsScriptRunning(true);
           addLog('Started logger script', 'success');
@@ -170,7 +174,7 @@ function App() {
 
   const handleClearData = async () => {
     try {
-      const response = await fetch('http://localhost:8000/clear_data', { method: 'POST' });
+      const response = await fetch(`${BACKEND_URL}/clear_data`, { method: 'POST' });
       if (response.ok) {
         setTelemetryData([]);
         setInitialOdometer(null);
@@ -186,7 +190,7 @@ function App() {
 
   useEffect(() => {
     // Check if script is already running
-    fetch('http://localhost:8000/status')
+    fetch(`${BACKEND_URL}/status`)
       .then(res => res.json())
       .then(data => {
         if (data.script_running) {

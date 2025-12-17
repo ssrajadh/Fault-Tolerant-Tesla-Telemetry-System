@@ -297,8 +297,10 @@ async def clear_data():
 
 
 if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
     print("\n=== Tesla Telemetry Server ===")
-    print("HTTP endpoint: http://localhost:8000/telemetry")
-    print("WebSocket: ws://localhost:8000/ws")
-    print("Status: http://localhost:8000/status\n")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    print(f"HTTP endpoint: http://0.0.0.0:{port}/telemetry")
+    print(f"WebSocket: ws://0.0.0.0:{port}/ws")
+    print(f"Status: http://0.0.0.0:{port}/status")
+    print(f"Dashboard: http://0.0.0.0:{port}/\n")
+    uvicorn.run(app, host="0.0.0.0", port=port)

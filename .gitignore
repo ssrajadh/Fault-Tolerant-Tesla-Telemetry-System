@@ -23,7 +23,7 @@ frontend_dashboard/.DS_Store
 frontend_dashboard/.env.local
 frontend_dashboard/.env.development.local
 frontend_dashboard/.env.test.local
-frontend_dashboard/.env.production.local
+frontend_dashboard/.env.production
 
 frontend_dashboard/npm-debug.log*
 frontend_dashboard/yarn-debug.log*
