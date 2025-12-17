@@ -71,10 +71,15 @@ async def stream_script_output():
     
     if script_process and script_process.stdout:
         try:
-            async for line in script_process.stdout:
+            while True:
+                line = await script_process.stdout.readline()
+                if not line:
+                    break
                 decoded_line = line.decode('utf-8').strip()
                 if decoded_line:
                     await manager.broadcast_log(decoded_line, "info")
+        except asyncio.CancelledError:
+            pass
         except Exception as e:
             await manager.broadcast_log(f"Error reading script output: {e}", "error")
 
@@ -209,12 +214,14 @@ async def start_script():
             await manager.broadcast_log("Logger executable not found. Compile it first with: g++ -o logger logger.cpp telemetry.pb.cc -lprotobuf -lcurl", "error")
             return {"status": "error", "message": "Logger not found"}
         
-        # Start the process
+        # Start the process with unbuffered output
         script_process = await asyncio.create_subprocess_exec(
-            logger_path,
+            "stdbuf", "-oL", "-eL", logger_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            cwd=os.path.dirname(logger_path)
+            stdin=asyncio.subprocess.PIPE,
+            cwd=os.path.dirname(logger_path),
+            bufsize=0
         )
         
         # Start streaming output
@@ -253,6 +260,25 @@ async def stop_script():
         
     except Exception as e:
         await manager.broadcast_log(f"Failed to stop script: {e}", "error")
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/toggle_offline")
+async def toggle_offline():
+    """Send Enter key to C++ logger to toggle offline/online mode"""
+    global script_process
+    
+    if not script_process or script_process.returncode is not None:
+        return {"status": "error", "message": "Script not running"}
+    
+    try:
+        if script_process.stdin:
+            script_process.stdin.write(b"\n")
+            await script_process.stdin.drain()
+            return {"status": "success", "message": "Toggled offline mode"}
+        else:
+            return {"status": "error", "message": "Stdin not available"}
+    except Exception as e:
         return {"status": "error", "message": str(e)}
 
 

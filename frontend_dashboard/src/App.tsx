@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import './App.css';
 
@@ -32,6 +32,8 @@ function App() {
   const [isConnected, setIsConnected] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [isScriptRunning, setIsScriptRunning] = useState(false);
+  const [initialOdometer, setInitialOdometer] = useState<number | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const terminalRef = useRef<HTMLDivElement>(null);
   const shouldAutoScroll = useRef(true);
@@ -73,9 +75,18 @@ function App() {
       const message: WebSocketMessage = JSON.parse(event.data);
       
       if (message.type === 'history') {
-        // Initial data load
+        // Initial data load - merge with existing data on reconnect
         const historyData = message.data as TelemetryData[];
-        setTelemetryData(historyData.slice(-maxDataPoints));
+        setTelemetryData(prev => {
+          if (prev.length === 0) {
+            return historyData.slice(-maxDataPoints);
+          } else {
+            // Merge and deduplicate by timestamp
+            const combined = [...prev, ...historyData];
+            const unique = Array.from(new Map(combined.map(item => [item.timestamp, item])).values());
+            return unique.slice(-maxDataPoints);
+          }
+        });
         setLastUpdate(new Date());
         addLog(`Loaded ${historyData.length} historical records`, 'info');
       } else if (message.type === 'telemetry') {
@@ -85,6 +96,8 @@ function App() {
           const updated = [...prev, newData];
           return updated.slice(-maxDataPoints);
         });
+        // Set initial odometer on first data point
+        setInitialOdometer(prevInitial => prevInitial ?? newData.odometer);
         setLastUpdate(new Date());
       } else if (message.type === 'log') {
         // Server-side log message
@@ -107,25 +120,35 @@ function App() {
 
   const handleKeyPress = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Enter') {
-      if (isConnected && wsRef.current) {
-        // Go offline
-        addLog('Going offline...', 'warning');
-        wsRef.current.close();
-      } else {
-        // Reconnect
-        addLog('Reconnecting...', 'info');
-        connectWebSocket();
-      }
+      e.preventDefault();
+      e.stopPropagation();
+      // Send Enter to C++ logger to toggle offline/online
+      fetch('http://localhost:8000/toggle_offline', { method: 'POST' })
+        .then(res => res.json())
+        .then(data => {
+          if (data.status === 'success') {
+            addLog('Toggled vehicle offline/online mode', 'info');
+          } else {
+            addLog('Failed to toggle offline mode', 'error');
+          }
+        })
+        .catch(() => {
+          addLog('Failed to toggle offline mode', 'error');
+        });
     }
   };
 
   const handlePlayScript = async () => {
     if (isScriptRunning) {
-      // Stop script
+      // Stop script and clear data
       try {
         await fetch('http://localhost:8000/stop_script', { method: 'POST' });
+        await fetch('http://localhost:8000/clear_data', { method: 'POST' });
         setIsScriptRunning(false);
-        addLog('Stopped logger script', 'warning');
+        setTelemetryData([]);
+        setInitialOdometer(null);
+        setLastUpdate(null);
+        addLog('Stopped logger script and cleared data', 'warning');
       } catch (error) {
         addLog('Failed to stop script', 'error');
       }
@@ -150,6 +173,7 @@ function App() {
       const response = await fetch('http://localhost:8000/clear_data', { method: 'POST' });
       if (response.ok) {
         setTelemetryData([]);
+        setInitialOdometer(null);
         setLastUpdate(null);
         addLog('Cleared all telemetry data', 'success');
       } else {
@@ -193,24 +217,39 @@ function App() {
     return date.toLocaleTimeString();
   };
 
+  // Convert heading degrees to compass direction
+  const getCompassDirection = (degrees: number) => {
+    const directions = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+    const index = Math.round(degrees / 22.5) % 16;
+    return directions[index];
+  };
+
   // Transform data for charts
-  const chartData = telemetryData.map((d, idx) => {
-    const odometerDelta = idx > 0 ? d.odometer - telemetryData[0].odometer : 0;
-    return {
-      time: formatTime(d.timestamp),
-      timestamp: d.timestamp,
-      speed: d.speed,
-      battery: d.battery,
-      power: d.power,
-      odometerDelta: odometerDelta,
-      heading: d.heading,
-    };
-  });
+  const chartData = useMemo(() => {
+    const baseOdometer = initialOdometer ?? (telemetryData.length > 0 ? telemetryData[0].odometer : 0);
+    return telemetryData.map((d) => {
+      const odometerDelta = d.odometer - baseOdometer;
+      return {
+        time: formatTime(d.timestamp),
+        timestamp: d.timestamp,
+        speed: d.speed,
+        battery: d.battery,
+        power: d.power,
+        odometerDelta: odometerDelta,
+        heading: d.heading,
+      };
+    });
+  }, [telemetryData, initialOdometer]);
 
   return (
     <div className="App">
       <header className="App-header">
-        <h1>Tesla Model 3 Telemetry Dashboard</h1>
+        <div className="header-title">
+          <h1>Tesla Model 3 Telemetry Dashboard</h1>
+          <button className="help-button" onClick={() => setShowHelp(true)} title="Help">
+            ?
+          </button>
+        </div>
         <div className="status-bar">
           <div className="status-indicator">
             <span className={`status-dot ${isConnected ? 'online' : 'offline'}`}></span>
@@ -226,13 +265,6 @@ function App() {
               </span>
             )}
           </div>
-          <button 
-            className="clear-data-button" 
-            onClick={handleClearData}
-            title="Clear all telemetry data"
-          >
-            🗑️ Clear Data
-          </button>
         </div>
       </header>
 
@@ -284,6 +316,7 @@ function App() {
                     strokeWidth={2}
                     dot={false}
                     name="Speed (mph)"
+                    isAnimationActive={false}
                   />
                 </LineChart>
               </ResponsiveContainer>
@@ -312,6 +345,7 @@ function App() {
                     strokeWidth={2}
                     dot={false}
                     name="Miles Traveled"
+                    isAnimationActive={false}
                   />
                 </LineChart>
               </ResponsiveContainer>
@@ -340,6 +374,7 @@ function App() {
                     strokeWidth={2}
                     dot={false}
                     name="Power (kW)"
+                    isAnimationActive={false}
                   />
                 </LineChart>
               </ResponsiveContainer>
@@ -367,7 +402,7 @@ function App() {
               ))}
             </div>
           <div className="terminal-footer">
-            Press Enter to {isConnected ? 'go offline' : 'reconnect'}
+            Press Enter to toggle vehicle offline/online mode
           </div>
         </div>
 
@@ -389,9 +424,9 @@ function App() {
                 <span className="value-number">
                   {(() => {
                     const last = telemetryData[telemetryData.length - 1];
-                    const first = telemetryData[0];
-                    if (last?.odometer !== undefined && first?.odometer !== undefined) {
-                      return (last.odometer - first.odometer).toFixed(2) + ' mi';
+                    const baseOdometer = initialOdometer ?? (telemetryData.length > 0 ? telemetryData[0].odometer : 0);
+                    if (last?.odometer !== undefined) {
+                      return (last.odometer - baseOdometer).toFixed(2) + ' mi';
                     }
                     return '0.00 mi';
                   })()}
@@ -403,12 +438,70 @@ function App() {
               </div>
               <div className="value-card">
                 <span className="value-label">Heading</span>
-                <span className="value-number">{telemetryData[telemetryData.length - 1]?.heading ?? 0}°</span>
+                <span className="value-number">
+                  {(() => {
+                    const heading = telemetryData[telemetryData.length - 1]?.heading;
+                    if (heading !== undefined) {
+                      return `${getCompassDirection(heading)} (${heading}°)`;
+                    }
+                    return 'N (0°)';
+                  })()}
+                </span>
               </div>
             </div>
           )}
         </div>
       </div>
+
+      {/* Help Modal */}
+      {showHelp && (
+        <div className="modal-overlay" onClick={() => setShowHelp(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>📖 Dashboard Guide</h2>
+              <button className="modal-close" onClick={() => setShowHelp(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <section>
+                <h3>What is this?</h3>
+                <p>A fault-tolerant telemetry system that demonstrates <strong>store-and-forward</strong> architecture. When the vehicle loses network connectivity, data is buffered locally and automatically uploaded when connection is restored.</p>
+                <p>The data shown is from a real Tesla Model 3 drive from Fremont to San Jose, California.</p>
+              </section>
+
+              <section>
+                <h3>How to use</h3>
+                <ul>
+                  <li><strong>▶ Play Button:</strong> Start the logger to begin replaying Tesla drive data</li>
+                  <li><strong>■ Stop Button:</strong> Stop the logger and clear all data</li>
+                  <li><strong>Press Enter:</strong> Toggle vehicle offline/online mode to simulate network interruptions</li>
+                </ul>
+              </section>
+
+              <section>
+                <h3>What happens offline?</h3>
+                <p>When you press Enter to go offline:</p>
+                <ul>
+                  <li>The logger buffers data to a local SQLite database</li>
+                  <li>You'll see <code>[BUFFERED]</code> messages in the terminal</li>
+                  <li>Charts stop updating (no data sent to server)</li>
+                  <li>Press Enter again to reconnect and flush all buffered records</li>
+                  <li>Charts will update with all the buffered data at once</li>
+                </ul>
+              </section>
+
+              <section>
+                <h3>Metrics explained</h3>
+                <ul>
+                  <li><strong>Speed:</strong> Vehicle speed in mph</li>
+                  <li><strong>Miles Traveled:</strong> Distance covered since logger started</li>
+                  <li><strong>Power:</strong> Power consumption in kW (positive = consuming, negative = regenerating)</li>
+                  <li><strong>Heading:</strong> Compass direction the vehicle is traveling</li>
+                </ul>
+              </section>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
