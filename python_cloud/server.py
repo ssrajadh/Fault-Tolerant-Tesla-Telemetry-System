@@ -104,7 +104,6 @@ async def receive_telemetry(request: Request):
             "speed": vehicle_data.vehicle_speed,
             "battery": vehicle_data.battery_level,
             "power": vehicle_data.power_kw,
-            "gear": vehicle_data.gear,
             "odometer": vehicle_data.odometer,
             "heading": vehicle_data.heading,
             "received_at": datetime.now().isoformat()

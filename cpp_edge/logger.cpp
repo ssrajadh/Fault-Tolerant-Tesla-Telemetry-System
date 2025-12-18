@@ -266,12 +266,6 @@ int main() {
                 power = json_data["drive_state"].value("power", 0.0f);
             }
             
-            std::string gear = "P";
-            if (json_data.contains("drive_state") && !json_data["drive_state"].is_null() 
-                && !json_data["drive_state"]["shift_state"].is_null()) {
-                gear = json_data["drive_state"].value("shift_state", "P");
-            }
-            
             float odometer = 0.0f;
             if (json_data.contains("vehicle_state") && !json_data["vehicle_state"].is_null() 
                 && json_data["vehicle_state"].contains("odometer") 
@@ -292,7 +286,6 @@ int main() {
             vehicle_data.set_vehicle_speed(speed);
             vehicle_data.set_battery_level(battery);
             vehicle_data.set_power_kw(power);
-            vehicle_data.set_gear(gear);
             vehicle_data.set_odometer(odometer);
             vehicle_data.set_heading(heading);
             
