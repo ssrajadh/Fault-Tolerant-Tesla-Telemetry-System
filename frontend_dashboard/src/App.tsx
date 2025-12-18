@@ -226,6 +226,66 @@ function App() {
     return directions[index];
   };
 
+  // Calculate Wh/mi and driving smoothness
+  const analyticsData = useMemo(() => {
+    if (telemetryData.length < 2) {
+      return { whPerMile: 0, smoothness: 100, avgAccel: 0 };
+    }
+
+    let totalEnergyWh = 0;
+    let totalDistanceMiles = 0;
+    let accelerations: number[] = [];
+    let jerks: number[] = [];
+
+    for (let i = 1; i < telemetryData.length; i++) {
+      const prev = telemetryData[i - 1];
+      const curr = telemetryData[i];
+
+      // Time delta in hours
+      const timeDeltaMs = curr.timestamp - prev.timestamp;
+      const timeDeltaHours = timeDeltaMs / (1000 * 60 * 60);
+      
+      if (timeDeltaHours > 0) {
+        // Energy consumed: Power (kW) × Time (hours) = kWh, convert to Wh
+        const energyWh = Math.abs(curr.power) * timeDeltaHours * 1000;
+        totalEnergyWh += energyWh;
+
+        // Distance traveled
+        const distanceMiles = curr.odometer - prev.odometer;
+        totalDistanceMiles += distanceMiles;
+
+        // Calculate acceleration (mph/s)
+        const timeDeltaSeconds = timeDeltaMs / 1000;
+        if (timeDeltaSeconds > 0) {
+          const accel = (curr.speed - prev.speed) / timeDeltaSeconds;
+          accelerations.push(accel);
+
+          // Calculate jerk (rate of change of acceleration)
+          if (i > 1 && accelerations.length > 1) {
+            const prevAccel = accelerations[accelerations.length - 2];
+            const jerk = Math.abs((accel - prevAccel) / timeDeltaSeconds);
+            jerks.push(jerk);
+          }
+        }
+      }
+    }
+
+    const whPerMile = totalDistanceMiles > 0 ? totalEnergyWh / totalDistanceMiles : 0;
+    
+    // Smoothness score: lower jerk = smoother (scale 0-100)
+    // Average jerk close to 0 = 100, higher jerk = lower score
+    const avgJerk = jerks.length > 0 ? jerks.reduce((a, b) => a + b, 0) / jerks.length : 0;
+    const smoothness = Math.max(0, Math.min(100, 100 - (avgJerk * 10))); // Scale jerk to 0-100
+
+    const avgAccel = accelerations.length > 0 ? accelerations.reduce((a, b) => a + b, 0) / accelerations.length : 0;
+
+    return { 
+      whPerMile: Math.round(whPerMile), 
+      smoothness: Math.round(smoothness),
+      avgAccel: avgAccel.toFixed(2)
+    };
+  }, [telemetryData]);
+
   // Transform data for charts
   const chartData = useMemo(() => {
     const baseOdometer = initialOdometer ?? (telemetryData.length > 0 ? telemetryData[0].odometer : 0);
@@ -470,6 +530,18 @@ function App() {
                   })()}
                 </span>
               </div>
+              <div className="value-card">
+                <span className="value-label">Efficiency</span>
+                <span className="value-number">
+                  {analyticsData.whPerMile > 0 ? `${analyticsData.whPerMile} Wh/mi` : 'Calculating...'}
+                </span>
+              </div>
+              <div className="value-card">
+                <span className="value-label">Smoothness</span>
+                <span className="value-number">
+                  {telemetryData.length > 2 ? `${analyticsData.smoothness}/100` : 'Calculating...'}
+                </span>
+              </div>
             </div>
           )}
         </div>
@@ -526,8 +598,10 @@ function App() {
                 <ul>
                   <li><strong>Speed:</strong> Vehicle speed in mph</li>
                   <li><strong>Miles Traveled:</strong> Distance covered since logger started</li>
-                  <li><strong>Power:</strong> Power consumption in kW (positive = consuming, negative = regenerating)</li>
-                  <li><strong>Heading:</strong> Compass direction the vehicle is traveling</li>
+                  <li><strong>Power:</strong> Instantaneous power consumption in kW (negative = regenerative braking)</li>
+                  <li><strong>Heading:</strong> Compass direction the vehicle is facing</li>
+                  <li><strong>Efficiency (Wh/mi):</strong> Energy consumption per mile (lower is better). Calculated as total energy (Wh) ÷ distance traveled</li>
+                  <li><strong>Smoothness (0-100):</strong> Driving smoothness score based on acceleration changes (jerk). Higher = smoother driving with less harsh acceleration/braking</li>
                 </ul>
               </section>
             </div>
