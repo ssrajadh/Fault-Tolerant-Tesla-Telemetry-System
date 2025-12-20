@@ -1,0 +1,19 @@
+# .gcloudignore - files to ignore when deploying to GCP
+# This prevents using .gitignore which excludes data files
+
+node_modules/
+npm-debug.log
+__pycache__/
+*.pyc
+.git/
+.gitignore
+.vscode/
+telemetry_buffer.db
+frontend_dashboard/node_modules/
+frontend_dashboard/build/
+venv/
+.pytest_cache/
+*.db
+
+# We want to include data files for the logger
+# !data/

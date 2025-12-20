@@ -38,6 +38,7 @@ function App() {
   const [isScriptRunning, setIsScriptRunning] = useState(false);
   const [initialOdometer, setInitialOdometer] = useState<number | null>(null);
   const [showHelp, setShowHelp] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
   const wsRef = useRef<WebSocket | null>(null);
   const terminalRef = useRef<HTMLDivElement>(null);
   const shouldAutoScroll = useRef(true);
@@ -128,7 +129,10 @@ function App() {
       e.stopPropagation();
       // Send Enter to C++ logger to toggle offline/online
       fetch(`${BACKEND_URL}/toggle_offline`, { method: 'POST' })
-        .then(() => addLog('Toggled offline/online mode', 'info'))
+        .then(() => {
+          setIsOnline(prev => !prev);
+          addLog('Toggled offline/online mode', 'info');
+        })
         .catch(err => addLog(`Toggle failed: ${err}`, 'error'));
     }
   };
@@ -136,7 +140,10 @@ function App() {
   const handleToggleOffline = () => {
     // Same functionality as pressing Enter
     fetch(`${BACKEND_URL}/toggle_offline`, { method: 'POST' })
-      .then(() => addLog('Toggled offline/online mode', 'info'))
+      .then(() => {
+        setIsOnline(prev => !prev);
+        addLog('Toggled offline/online mode', 'info');
+      })
       .catch(err => addLog(`Toggle failed: ${err}`, 'error'));
   };
 
@@ -483,7 +490,7 @@ function App() {
               disabled={!isScriptRunning}
               title="Toggle offline/online mode"
             >
-              Toggle Offline
+              {isOnline ? 'Toggle Offline' : 'Toggle Online'}
             </button>
           </div>
         </div>

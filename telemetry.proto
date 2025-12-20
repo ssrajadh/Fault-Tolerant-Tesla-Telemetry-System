@@ -10,6 +10,18 @@ message VehicleData {
   int32 heading = 7;        // degrees (0-360)
 }
 
+// Compressed telemetry using predictive compression
+// Only transmits fields when prediction error exceeds threshold
+message CompressedVehicleData {
+  int64 timestamp = 1;           // Always sent
+  optional float vehicle_speed = 2;   // Only if |actual - predicted| > 2 mph
+  optional float battery_level = 3;   // Only if |actual - predicted| > 0.5%
+  optional float power_kw = 4;        // Only if |actual - predicted| > 5 kW
+  float odometer = 5;                 // Always sent (critical for distance)
+  optional int32 heading = 6;         // Only if |actual - predicted| > 5°
+  bool is_resync = 7;                 // Periodic full update every 30s
+}
+
 message TelemetryBatch {
   repeated VehicleData records = 1;
   string device_id = 2;
