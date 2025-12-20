@@ -324,17 +324,21 @@ void flushBuffer(sqlite3* db) {
         const void* blob = sqlite3_column_blob(stmt, 2);
         int blob_size = sqlite3_column_bytes(stmt, 2);
         
-        // Deserialize protobuf
-        tesla::VehicleData data;
+        // Deserialize compressed protobuf
+        tesla::CompressedVehicleData data;
         if (data.ParseFromArray(blob, blob_size)) {
             std::string serialized_data((const char*)blob, blob_size);
             
-            // Try to upload
-            if (uploadToServer(serialized_data, data)) {
+            // Try to upload compressed data
+            if (uploadCompressedToServer(serialized_data, data)) {
                 // Delete from buffer after successful upload
                 std::string delete_sql = "DELETE FROM telemetry_buffer WHERE id = " + std::to_string(id) + ";";
                 sqlite3_exec(db, delete_sql.c_str(), nullptr, nullptr, nullptr);
                 count++;
+                
+                // Small delay between uploads to prevent frontend calculation issues
+                // This simulates real-time data arrival for efficiency calculations
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
             } else {
                 failed++;
                 // Keep in buffer if upload fails
@@ -484,7 +488,7 @@ int main() {
                     std::cout << "\n[RECONNECTED] Flushing buffered data..." << std::endl;
                     flushBuffer(db);
                     g_predictor.printStats();
-                    g_predictor.reset();  // Reset compression stats after reconnect
+                    // DON'T reset predictor - keep it synchronized with server!
                     was_offline = false;
                 }
                 
@@ -495,8 +499,22 @@ int main() {
                     storeToBuffer(db, timestamp, serialized_compressed);
                 }
             } else {
-                // Store compressed data to buffer
-                if (storeToBuffer(db, timestamp, serialized_compressed)) {
+                // For offline buffering, store COMPLETE data (all fields)
+                // This ensures proper reconstruction when flushed later
+                tesla::CompressedVehicleData complete_data;
+                complete_data.set_timestamp(timestamp);
+                complete_data.set_odometer(odometer);
+                complete_data.set_vehicle_speed(speed);
+                complete_data.set_power_kw(power);
+                complete_data.set_battery_level(battery);
+                complete_data.set_heading(heading);
+                complete_data.set_is_resync(true);  // Mark as resync for server
+                
+                std::string serialized_complete;
+                complete_data.SerializeToString(&serialized_complete);
+                
+                // Store complete data to buffer
+                if (storeToBuffer(db, timestamp, serialized_complete)) {
                     std::cout << "[BUFFERED] Record " << line_count 
                               << " stored to SQLite (Time=" << timestamp << ")" << std::endl;
                 }
