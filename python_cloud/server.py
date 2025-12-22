@@ -106,6 +106,21 @@ async def receive_telemetry(request: Request):
             compressed_data = telemetry_pb2.CompressedVehicleData()
             compressed_data.ParseFromString(data)
             
+            # Track compression statistics
+            g_predictor.total_readings += 4  # 4 fields: speed, power, battery, heading
+            fields_transmitted = 0
+            if compressed_data.HasField('vehicle_speed'):
+                fields_transmitted += 1
+            if compressed_data.HasField('power_kw'):
+                fields_transmitted += 1
+            if compressed_data.HasField('battery_level'):
+                fields_transmitted += 1
+            if compressed_data.HasField('heading'):
+                fields_transmitted += 1
+            
+            g_predictor.transmitted_readings += fields_transmitted
+            g_predictor.skipped_readings += (4 - fields_transmitted)
+            
             # Reconstruct full telemetry using predictor
             predicted = g_predictor.get_predicted_values()
             
@@ -176,7 +191,8 @@ async def receive_telemetry(request: Request):
         # Broadcast to all connected WebSocket clients
         await manager.broadcast({
             "type": "telemetry",
-            "data": telemetry_dict
+            "data": telemetry_dict,
+            "compression_stats": g_predictor.get_compression_stats()
         })
         
         return {"status": "ok", "records_buffered": len(telemetry_buffer)}
@@ -344,10 +360,14 @@ async def toggle_offline():
 @app.post("/clear_data")
 async def clear_data():
     """Clear all telemetry data"""
-    global telemetry_buffer
+    global telemetry_buffer, g_predictor
     
     try:
         telemetry_buffer.clear()
+        # Reset predictor statistics
+        g_predictor.total_readings = 0
+        g_predictor.transmitted_readings = 0
+        g_predictor.skipped_readings = 0
         await manager.broadcast_log("=== Data Cleared ===", "info")
         return {"status": "success", "message": "Data cleared", "records_cleared": 0}
     except Exception as e:

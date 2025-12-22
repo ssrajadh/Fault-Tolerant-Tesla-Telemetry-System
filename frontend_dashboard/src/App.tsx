@@ -13,10 +13,24 @@ interface TelemetryData {
   received_at: string;
 }
 
+interface CompressionDataPoint {
+  timestamp: number;
+  compression_ratio: number;
+  transmitted: number;
+  skipped: number;
+}
+
 interface LogMessage {
   timestamp: string;
   message: string;
   type?: 'info' | 'success' | 'error' | 'warning';
+}
+
+interface CompressionStats {
+  total_readings: number;
+  transmitted_readings: number;
+  skipped_readings: number;
+  compression_ratio: number;
 }
 
 interface WebSocketMessage {
@@ -24,6 +38,7 @@ interface WebSocketMessage {
   data?: TelemetryData | TelemetryData[];
   message?: string;
   log_type?: 'info' | 'success' | 'error' | 'warning';
+  compression_stats?: CompressionStats;
 }
 
 function App() {
@@ -32,13 +47,21 @@ function App() {
   const WS_URL = BACKEND_URL.replace('https://', 'wss://').replace('http://', 'ws://');
 
   const [telemetryData, setTelemetryData] = useState<TelemetryData[]>([]);
+  const [compressionHistory, setCompressionHistory] = useState<CompressionDataPoint[]>([]);
   const [logs, setLogs] = useState<LogMessage[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [isScriptRunning, setIsScriptRunning] = useState(false);
   const [initialOdometer, setInitialOdometer] = useState<number | null>(null);
   const [showHelp, setShowHelp] = useState(false);
+  const [showCompressionInfo, setShowCompressionInfo] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
+  const [compressionStats, setCompressionStats] = useState<CompressionStats>({
+    total_readings: 0,
+    transmitted_readings: 0,
+    skipped_readings: 0,
+    compression_ratio: 0
+  });
   const wsRef = useRef<WebSocket | null>(null);
   const terminalRef = useRef<HTMLDivElement>(null);
   const shouldAutoScroll = useRef(true);
@@ -78,6 +101,25 @@ function App() {
 
     ws.onmessage = (event) => {
       const message: WebSocketMessage = JSON.parse(event.data);
+      
+      // Update compression stats if available
+      if (message.compression_stats) {
+        setCompressionStats(message.compression_stats);
+        
+        // Add to compression history for charting
+        if (message.type === 'telemetry') {
+          const newData = message.data as TelemetryData;
+          setCompressionHistory(prev => {
+            const updated = [...prev, {
+              timestamp: newData.timestamp,
+              compression_ratio: message.compression_stats!.compression_ratio,
+              transmitted: message.compression_stats!.transmitted_readings,
+              skipped: message.compression_stats!.skipped_readings
+            }];
+            return updated.slice(-maxDataPoints);
+          });
+        }
+      }
       
       if (message.type === 'history') {
         // Initial data load - merge with existing data on reconnect
@@ -155,6 +197,13 @@ function App() {
         await fetch(`${BACKEND_URL}/clear_data`, { method: 'POST' });
         setIsScriptRunning(false);
         setTelemetryData([]);
+        setCompressionHistory([]);
+        setCompressionStats({
+          total_readings: 0,
+          transmitted_readings: 0,
+          skipped_readings: 0,
+          compression_ratio: 0
+        });
         setInitialOdometer(null);
         setLastUpdate(null);
         addLog('Stopped logger script and cleared data', 'warning');
@@ -182,6 +231,13 @@ function App() {
       const response = await fetch(`${BACKEND_URL}/clear_data`, { method: 'POST' });
       if (response.ok) {
         setTelemetryData([]);
+        setCompressionHistory([]);
+        setCompressionStats({
+          total_readings: 0,
+          transmitted_readings: 0,
+          skipped_readings: 0,
+          compression_ratio: 0
+        });
         setInitialOdometer(null);
         setLastUpdate(null);
         addLog('Cleared all telemetry data', 'success');
@@ -371,6 +427,21 @@ function App() {
                 <p>Waiting for data...</p>
               </div>
             </div>
+            <div className="grid-item chart-container no-data-chart">
+              <div className="chart-header-with-info">
+                <h2>Compression Efficiency</h2>
+                <button 
+                  className="info-button" 
+                  onClick={() => setShowCompressionInfo(true)}
+                  title="About Compression"
+                >
+                  i
+                </button>
+              </div>
+              <div className="waiting-message">
+                <p>Waiting for data...</p>
+              </div>
+            </div>
           </>
         ) : (
           <>
@@ -459,6 +530,50 @@ function App() {
                   />
                 </LineChart>
               </ResponsiveContainer>
+            </div>
+
+            {/* Compression Ratio Chart */}
+            <div className="grid-item chart-container">
+              <div className="chart-header-with-info">
+                <h2>Compression Efficiency</h2>
+                <button 
+                  className="info-button" 
+                  onClick={() => setShowCompressionInfo(true)}
+                  title="About Compression"
+                >
+                  i
+                </button>
+              </div>
+              <div className="chart-content">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={compressionHistory.map(d => ({
+                  time: formatTime(d.timestamp),
+                  ratio: d.compression_ratio
+                }))} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis 
+                    dataKey="time" 
+                    tick={{ fontSize: 11 }}
+                    interval="preserveStartEnd"
+                  />
+                  <YAxis 
+                    label={{ value: 'Bandwidth Saved (%)', angle: -90, position: 'insideLeft', style: { fontSize: 12 } }}
+                    domain={[0, 100]}
+                  />
+                  <Tooltip />
+                  <Legend />
+                  <Line 
+                    type="monotone" 
+                    dataKey="ratio" 
+                    stroke="#38ef7d" 
+                    strokeWidth={2}
+                    dot={false}
+                    name="Compression (%)"
+                    isAnimationActive={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+              </div>
             </div>
           </>
         )}
@@ -549,6 +664,24 @@ function App() {
                   {telemetryData.length > 2 ? `${analyticsData.smoothness}/100` : 'Calculating...'}
                 </span>
               </div>
+              <div className="value-card compression-stats">
+                <span className="value-label">Bandwidth Saved</span>
+                <span className="value-number compression-ratio">
+                  {compressionStats.compression_ratio.toFixed(1)}%
+                </span>
+              </div>
+              <div className="value-card compression-stats">
+                <span className="value-label">Fields Skipped</span>
+                <span className="value-number">
+                  {compressionStats.skipped_readings} / {compressionStats.total_readings}
+                </span>
+              </div>
+              <div className="value-card compression-stats">
+                <span className="value-label">Packets Sent</span>
+                <span className="value-number">
+                  {Math.floor(compressionStats.total_readings / 4)}
+                </span>
+              </div>
             </div>
           )}
         </div>
@@ -609,6 +742,67 @@ function App() {
                   <li><strong>Heading:</strong> Compass direction the vehicle is facing</li>
                   <li><strong>Efficiency (Wh/mi):</strong> Energy consumption per mile (lower is better). Calculated as total energy (Wh) ÷ distance traveled</li>
                   <li><strong>Smoothness (0-100):</strong> Driving smoothness score based on acceleration changes (jerk). Higher = smoother driving with less harsh acceleration/braking</li>
+                </ul>
+              </section>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Compression Info Modal */}
+      {showCompressionInfo && (
+        <div className="modal-overlay" onClick={() => setShowCompressionInfo(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>📊 Smart Compression Engine</h2>
+              <button className="modal-close" onClick={() => setShowCompressionInfo(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <section>
+                <h3>How It Works</h3>
+                <p>The system uses <strong>predictive compression</strong> with exponential smoothing to reduce bandwidth by 60-90%.</p>
+              </section>
+
+              <section>
+                <h3>Algorithm</h3>
+                <pre style={{background: 'rgba(0,0,0,0.05)', padding: '0.5rem', borderRadius: '5px', fontSize: '0.9rem'}}>
+predicted = 0.3 × actual + 0.7 × previous_predicted
+                </pre>
+                <p>Only transmits fields when <code>|actual - predicted| &gt; threshold</code></p>
+              </section>
+
+              <section>
+                <h3>Compression Thresholds</h3>
+                <ul>
+                  <li><strong>Speed:</strong> ±2 mph</li>
+                  <li><strong>Power:</strong> ±5 kW</li>
+                  <li><strong>Battery:</strong> ±0.5%</li>
+                  <li><strong>Heading:</strong> ±5°</li>
+                </ul>
+              </section>
+
+              <section>
+                <h3>Example</h3>
+                <p><strong>Highway Cruise Control (65 mph):</strong></p>
+                <ul>
+                  <li>Speed prediction: 65.1 mph</li>
+                  <li>Actual: 65.0 mph → difference 0.1 mph</li>
+                  <li>0.1 &lt; 2 mph threshold → <strong>speed field omitted</strong></li>
+                  <li>Result: ~30% packet size reduction</li>
+                </ul>
+              </section>
+
+              <section>
+                <h3>Safety Feature</h3>
+                <p>Every 30 seconds, all fields are transmitted regardless of thresholds to prevent predictor drift and ensure long-term accuracy.</p>
+              </section>
+
+              <section>
+                <h3>Metrics</h3>
+                <ul>
+                  <li><strong>Bandwidth Saved:</strong> Percentage of fields skipped vs total</li>
+                  <li><strong>Fields Skipped:</strong> Count of omitted fields (higher = better compression)</li>
+                  <li><strong>Packets Sent:</strong> Number of telemetry packets processed</li>
                 </ul>
               </section>
             </div>
