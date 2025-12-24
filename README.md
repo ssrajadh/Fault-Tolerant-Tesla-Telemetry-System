@@ -25,7 +25,7 @@ graph LR
 ```
 
 ## Tech Stack
-* **Edge Logic:** C++17 (Thread-safe ring buffer, fstreams)
+* **Edge Logic:** C++17
 * **Serialization:** Protocol Buffers (Google Protobuf)
 * **Persistence:** SQLite (WAL mode for concurrent writes)
 * **Backend:** Python (FastAPI with WebSocket support)
@@ -34,7 +34,7 @@ graph LR
 
 ## Features
 
-### Smart Compression Engine (ML-Based)
+### Smart Compression Engine
 - **Predictive Compression**: Exponential smoothing algorithm predicts next telemetry values
 - **Selective Transmission**: Only sends fields when `|actual - predicted| > threshold`
 - **Bandwidth Savings**: 60-90% reduction on highways, 20-40% in city driving
@@ -94,12 +94,6 @@ predicted_value = 0.3 × actual_current + 0.7 × predicted_previous
 - Ensures long-term accuracy
 
 ## Future Work
-
-### Dashboard Enhancements
-- **Compression Statistics Display**: Real-time bandwidth savings visualization on the dashboard
-- **Predictor State Visualization**: Show predicted vs actual values for each telemetry field
-- **Compression Ratio Chart**: Historical graph of compression effectiveness over time
-- **Field Transmission Heatmap**: Visual indicator of which fields are being transmitted vs omitted
 
 ### Scalability & Orchestration
 - **Apache Kafka**: Event streaming architecture for multi-vehicle ingestion
