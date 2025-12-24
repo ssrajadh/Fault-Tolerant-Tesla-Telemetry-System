@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database (optional local dev, use Supabase for prod)
+  postgres:
+    image: postgres:15-alpine
+    container_name: telemetry-postgres
+    environment:
+      POSTGRES_DB: telemetry
+      POSTGRES_USER: telemetry_app
+      POSTGRES_PASSWORD: dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U telemetry_app -d telemetry"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Python Backend (optional, use Cloud Run for prod)
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: telemetry-backend
+    ports:
+      - "8000:8080"
+    environment:
+      - PORT=8080
+      - DATABASE_URL=postgresql://telemetry_app:dev_password@postgres:5432/telemetry
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./python_cloud:/app/python_cloud
+      - ./cpp_edge:/app/cpp_edge
+      - ./data:/app/data
+
+volumes:
+  postgres_data:

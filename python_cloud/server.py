@@ -8,7 +8,12 @@ import uvicorn
 import subprocess
 import asyncio
 import os
+import sys
 from predictor import TelemetryPredictor
+
+# Add parent directory to path for database imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from database.supabase_client import get_supabase_client
 
 app = FastAPI()
 
@@ -17,6 +22,23 @@ script_process = None
 
 # Global predictor for reconstruction
 g_predictor = TelemetryPredictor()
+
+# Supabase configuration
+USE_SUPABASE = os.getenv("ENABLE_SUPABASE", "false") == "true"
+VEHICLE_ID = None
+supabase = None
+
+if USE_SUPABASE:
+    supabase = get_supabase_client()
+    # Get sample vehicle ID (VIN: 5YJ3E1EA1KF000001)
+    sample_vehicle = supabase.get_vehicle_by_vin("5YJ3E1EA1KF000001")
+    if sample_vehicle:
+        VEHICLE_ID = sample_vehicle['id']
+        print(f"[SUPABASE] Using vehicle: {sample_vehicle['model']} (ID: {VEHICLE_ID})")
+    else:
+        print("[SUPABASE] Warning: Sample vehicle not found. Run database/schema.sql first.")
+        USE_SUPABASE = False  # Disable if vehicle not found
+
 script_task = None
 
 # Enable CORS for React
@@ -187,6 +209,10 @@ async def receive_telemetry(request: Request):
         telemetry_buffer.append(telemetry_dict)
         if len(telemetry_buffer) > MAX_BUFFER_SIZE:
             telemetry_buffer.pop(0)
+        
+        # Store in Supabase if enabled
+        if USE_SUPABASE and VEHICLE_ID:
+            supabase.insert_telemetry(VEHICLE_ID, telemetry_dict)
         
         # Broadcast to all connected WebSocket clients
         await manager.broadcast({
