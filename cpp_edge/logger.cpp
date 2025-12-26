@@ -139,10 +139,10 @@ TelemetryPredictor g_predictor;
 // Server and Database Functions
 // ============================================================================
 
-// Server configuration - use environment variable if set, otherwise default to 8000
+// Server configuration - use environment variable if set, otherwise default to 8001
 std::string getServerUrl() {
     const char* port_env = std::getenv("SERVER_PORT");
-    std::string port = port_env ? port_env : "8000";
+    std::string port = port_env ? port_env : "8001";
     return "http://localhost:" + port + "/telemetry";
 }
 
@@ -156,6 +156,9 @@ size_t write_callback(void* contents, size_t size, size_t nmemb, void* userp) {
 // Global flag for online/offline status
 std::atomic<bool> is_online(true);
 
+// Global vehicle VIN (configurable via environment variable)
+std::string g_vehicle_vin = "5YJ3E1EA1KF000001";  // Default VIN
+
 // Thread to listen for Enter key to toggle online/offline
 void connectionToggleThread() {
     std::string input;
@@ -168,8 +171,10 @@ void connectionToggleThread() {
 
 // Initialize SQLite database
 sqlite3* initDatabase() {
+    // Use vehicle-specific database file
+    std::string db_filename = "telemetry_buffer_" + g_vehicle_vin + ".db";
     sqlite3* db;
-    int rc = sqlite3_open("telemetry_buffer.db", &db);
+    int rc = sqlite3_open(db_filename.c_str(), &db);
     
     if (rc) {
         std::cerr << "Can't open database: " << sqlite3_errmsg(db) << std::endl;
@@ -194,7 +199,7 @@ sqlite3* initDatabase() {
         return nullptr;
     }
     
-    std::cout << "[DATABASE] Initialized telemetry_buffer.db" << std::endl;
+    std::cout << "[DATABASE] Initialized " << db_filename << std::endl;
     return db;
 }
 
@@ -276,6 +281,10 @@ bool uploadCompressedToServer(const std::string& serialized_data, const tesla::C
     headers = curl_slist_append(headers, "Content-Type: application/octet-stream");
     headers = curl_slist_append(headers, "X-Compressed: true");  // Signal compressed data
     
+    // Add VIN header for multi-vehicle support
+    std::string vin_header = "X-Vehicle-VIN: " + g_vehicle_vin;
+    headers = curl_slist_append(headers, vin_header.c_str());
+    
     curl_easy_setopt(curl, CURLOPT_URL, SERVER_URL.c_str());
     curl_easy_setopt(curl, CURLOPT_POST, 1L);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, serialized_data.c_str());
@@ -288,7 +297,8 @@ bool uploadCompressedToServer(const std::string& serialized_data, const tesla::C
     
     bool success = (res == CURLE_OK);
     if (success) {
-        std::cout << "[UPLOAD COMPRESSED] ✓ Sent: Time=" << data.timestamp()
+        std::cout << "[UPLOAD COMPRESSED] ✓ Sent: VIN=" << g_vehicle_vin.substr(g_vehicle_vin.length() - 6)
+                  << " Time=" << data.timestamp()
                   << ", Odometer=" << data.odometer() << " mi"
                   << (data.has_vehicle_speed() ? " +Speed" : "")
                   << (data.has_battery_level() ? " +Battery" : "")
@@ -357,7 +367,7 @@ void flushBuffer(sqlite3* db) {
     }
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     // Initialize curl globally
     curl_global_init(CURL_GLOBAL_DEFAULT);
     
@@ -365,7 +375,19 @@ int main() {
     // compatible with the version of the headers we compiled against.
     GOOGLE_PROTOBUF_VERIFY_VERSION;
     
-    // Initialize SQLite database
+    // Read vehicle VIN from environment variable or command line argument
+    const char* vin_env = std::getenv("VEHICLE_VIN");
+    if (argc > 1) {
+        g_vehicle_vin = argv[1];  // Command line argument takes priority
+    } else if (vin_env) {
+        g_vehicle_vin = vin_env;
+    }
+    // else use default VIN
+    
+    std::cout << "\n=== Multi-Vehicle Tesla Telemetry System ===" << std::endl;
+    std::cout << "Vehicle VIN: " << g_vehicle_vin << std::endl;
+    
+    // Initialize SQLite database (vehicle-specific)
     sqlite3* db = initDatabase();
     if (!db) {
         return 1;
@@ -375,13 +397,14 @@ int main() {
     std::thread toggleThread(connectionToggleThread);
     toggleThread.detach();
     
-    std::cout << "\n=== Store-and-Forward Tesla Telemetry System ===" << std::endl;
     std::cout << "Press ENTER to toggle ONLINE/OFFLINE mode" << std::endl;
     std::cout << "Current Status: " << (is_online ? "ONLINE" : "OFFLINE") << "\n" << std::endl;
     
     // Open JSONL file (simulating CAN bus)
     // Check multiple possible paths (local dev vs Docker container)
+    // For multi-vehicle simulation, look for vehicle-specific files first
     std::vector<std::string> possible_paths = {
+        "../data/vehicle_logs/tesla_log_" + g_vehicle_vin + ".jsonl",  // Vehicle-specific log
         "../data/tesla_raw_log.jsonl",   // Local development (full file)
         "/app/data/tesla_raw_log.jsonl",  // Docker container (full file)
         "../data/tesla_sample.jsonl",    // Local development (sample)

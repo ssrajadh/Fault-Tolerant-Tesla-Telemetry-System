@@ -11,6 +11,7 @@ interface TelemetryData {
   odometer: number;
   heading: number;
   received_at: string;
+  vehicle_vin?: string;  // Last 6 digits of VIN for multi-vehicle support
 }
 
 interface CompressionDataPoint {
@@ -39,11 +40,12 @@ interface WebSocketMessage {
   message?: string;
   log_type?: 'info' | 'success' | 'error' | 'warning';
   compression_stats?: CompressionStats;
+  vehicle_vin?: string;  // Vehicle identifier for multi-vehicle support
 }
 
 function App() {
   // Backend URL from environment variable (localhost for dev, Cloud Run for production)
-  const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000';
+  const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8001';
   const WS_URL = BACKEND_URL.replace('https://', 'wss://').replace('http://', 'ws://');
 
   const [telemetryData, setTelemetryData] = useState<TelemetryData[]>([]);
@@ -56,6 +58,7 @@ function App() {
   const [showHelp, setShowHelp] = useState(false);
   const [showCompressionInfo, setShowCompressionInfo] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
+  const [selectedVehicle, setSelectedVehicle] = useState<string>('all');  // 'all' or VIN suffix
   const [compressionStats, setCompressionStats] = useState<CompressionStats>({
     total_readings: 0,
     transmitted_readings: 0,
@@ -101,6 +104,7 @@ function App() {
 
     ws.onmessage = (event) => {
       const message: WebSocketMessage = JSON.parse(event.data);
+      console.log('[Dashboard] Received WebSocket message:', message.type, 'VIN:', message.vehicle_vin);
       
       // Update compression stats if available
       if (message.compression_stats) {
@@ -109,6 +113,10 @@ function App() {
         // Add to compression history for charting
         if (message.type === 'telemetry') {
           const newData = message.data as TelemetryData;
+          // Add vehicle VIN to telemetry data if provided
+          if (message.vehicle_vin && newData) {
+            newData.vehicle_vin = message.vehicle_vin;
+          }
           setCompressionHistory(prev => {
             const updated = [...prev, {
               timestamp: newData.timestamp,
@@ -139,6 +147,13 @@ function App() {
       } else if (message.type === 'telemetry') {
         // Real-time update
         const newData = message.data as TelemetryData;
+        // Add vehicle VIN to telemetry data if provided
+        if (message.vehicle_vin) {
+          newData.vehicle_vin = message.vehicle_vin;
+          console.log('[Dashboard] Added VIN to telemetry:', message.vehicle_vin);
+        } else {
+          console.warn('[Dashboard] No vehicle_vin in message!');
+        }
         setTelemetryData(prev => {
           const updated = [...prev, newData];
           return updated.slice(-maxDataPoints);
@@ -289,9 +304,25 @@ function App() {
     return directions[index];
   };
 
+  // Get unique vehicle VINs from telemetry data
+  const availableVehicles = useMemo(() => {
+    const vins = new Set(telemetryData.map(d => d.vehicle_vin).filter(Boolean));
+    const vinArray = Array.from(vins).sort();
+    console.log('[Dashboard] Available vehicles:', vinArray, 'from', telemetryData.length, 'data points');
+    return vinArray;
+  }, [telemetryData]);
+
+  // Filter telemetry data by selected vehicle
+  const filteredData = useMemo(() => {
+    if (selectedVehicle === 'all') {
+      return telemetryData;
+    }
+    return telemetryData.filter(d => d.vehicle_vin === selectedVehicle);
+  }, [telemetryData, selectedVehicle]);
+
   // Calculate Wh/mi and driving smoothness
   const analyticsData = useMemo(() => {
-    if (telemetryData.length < 2) {
+    if (filteredData.length < 2) {
       return { whPerMile: 0, smoothness: 100, avgAccel: 0 };
     }
 
@@ -300,9 +331,9 @@ function App() {
     let accelerations: number[] = [];
     let jerks: number[] = [];
 
-    for (let i = 1; i < telemetryData.length; i++) {
-      const prev = telemetryData[i - 1];
-      const curr = telemetryData[i];
+    for (let i = 1; i < filteredData.length; i++) {
+      const prev = filteredData[i - 1];
+      const curr = filteredData[i];
 
       // Time delta in hours
       const timeDeltaMs = curr.timestamp - prev.timestamp;
@@ -347,12 +378,12 @@ function App() {
       smoothness: Math.round(smoothness),
       avgAccel: avgAccel.toFixed(2)
     };
-  }, [telemetryData]);
+  }, [filteredData]);
 
   // Transform data for charts
   const chartData = useMemo(() => {
-    const baseOdometer = initialOdometer ?? (telemetryData.length > 0 ? telemetryData[0].odometer : 0);
-    return telemetryData.map((d) => {
+    const baseOdometer = initialOdometer ?? (filteredData.length > 0 ? filteredData[0].odometer : 0);
+    return filteredData.map((d) => {
       const odometerDelta = d.odometer - baseOdometer;
       return {
         time: formatTime(d.timestamp),
@@ -394,8 +425,33 @@ function App() {
               {isConnected ? 'Connected' : 'Disconnected'}
             </span>
           </div>
+          {availableVehicles.length > 0 && (
+            <div className="vehicle-selector">
+              <label htmlFor="vehicle-filter">Vehicle: </label>
+              <select 
+                id="vehicle-filter"
+                value={selectedVehicle} 
+                onChange={(e) => setSelectedVehicle(e.target.value)}
+                className="vehicle-dropdown"
+              >
+                <option value="all">
+                  {availableVehicles.length > 1 
+                    ? `All Vehicles (${availableVehicles.length})` 
+                    : 'All Vehicles'}
+                </option>
+                {availableVehicles.map(vin => (
+                  <option key={vin} value={vin}>
+                    VIN: {vin}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="data-info">
-            <span>Data Points: {telemetryData.length}</span>
+            <span>Data Points: {filteredData.length}</span>
+            {selectedVehicle !== 'all' && telemetryData.length > filteredData.length && (
+              <span className="filter-info"> (of {telemetryData.length} total)</span>
+            )}
             {lastUpdate && (
               <span className="last-update">
                 Last Update: {lastUpdate.toLocaleTimeString()}
@@ -612,23 +668,27 @@ function App() {
 
         {/* Current Values */}
         <div className="grid-item current-values">
-          <h2>Current Values</h2>
-          {telemetryData.length === 0 ? (
+          <h2>Current Values{selectedVehicle !== 'all' && ` - VIN: ${selectedVehicle}`}</h2>
+          {filteredData.length === 0 ? (
             <div className="waiting-message">
-              <p>No data yet - start the logger</p>
+              <p>
+                {selectedVehicle === 'all' 
+                  ? 'No data yet - start the logger' 
+                  : `No data for vehicle ${selectedVehicle}`}
+              </p>
             </div>
           ) : (
             <div className="values-grid-compact">
               <div className="value-card">
                 <span className="value-label">Speed</span>
-                <span className="value-number">{telemetryData[telemetryData.length - 1]?.speed.toFixed(1)} mph</span>
+                <span className="value-number">{filteredData[filteredData.length - 1]?.speed.toFixed(1)} mph</span>
               </div>
               <div className="value-card">
                 <span className="value-label">Miles Traveled</span>
                 <span className="value-number">
                   {(() => {
-                    const last = telemetryData[telemetryData.length - 1];
-                    const baseOdometer = initialOdometer ?? (telemetryData.length > 0 ? telemetryData[0].odometer : 0);
+                    const last = filteredData[filteredData.length - 1];
+                    const baseOdometer = initialOdometer ?? (filteredData.length > 0 ? filteredData[0].odometer : 0);
                     if (last?.odometer !== undefined) {
                       return (last.odometer - baseOdometer).toFixed(2) + ' mi';
                     }
@@ -638,13 +698,13 @@ function App() {
               </div>
               <div className="value-card">
                 <span className="value-label">Power</span>
-                <span className="value-number">{telemetryData[telemetryData.length - 1]?.power.toFixed(1)} kW</span>
+                <span className="value-number">{filteredData[filteredData.length - 1]?.power.toFixed(1)} kW</span>
               </div>
               <div className="value-card">
                 <span className="value-label">Heading</span>
                 <span className="value-number">
                   {(() => {
-                    const heading = telemetryData[telemetryData.length - 1]?.heading;
+                    const heading = filteredData[filteredData.length - 1]?.heading;
                     if (heading !== undefined) {
                       return `${getCompassDirection(heading)} (${heading}°)`;
                     }
@@ -661,7 +721,7 @@ function App() {
               <div className="value-card">
                 <span className="value-label">Smoothness</span>
                 <span className="value-number">
-                  {telemetryData.length > 2 ? `${analyticsData.smoothness}/100` : 'Calculating...'}
+                  {filteredData.length > 2 ? `${analyticsData.smoothness}/100` : 'Calculating...'}
                 </span>
               </div>
               <div className="value-card compression-stats">

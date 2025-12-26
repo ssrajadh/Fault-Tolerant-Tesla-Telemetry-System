@@ -120,6 +120,20 @@ async def receive_telemetry(request: Request):
         # Check if this is compressed data
         is_compressed = request.headers.get("X-Compressed", "false") == "true"
         
+        # Get vehicle VIN from header (for multi-vehicle support)
+        vehicle_vin = request.headers.get("X-Vehicle-VIN", "5YJ3E1EA1KF000001")
+        
+        # Lookup vehicle ID for this VIN (cache lookup)
+        vehicle_id = VEHICLE_ID  # Use default cached ID
+        if USE_SUPABASE and vehicle_vin != "5YJ3E1EA1KF000001":
+            # Lookup vehicle by VIN if not the default
+            vehicle_info = supabase.get_vehicle_by_vin(vehicle_vin)
+            if vehicle_info:
+                vehicle_id = vehicle_info['id']
+            else:
+                print(f"[WARNING] Unknown vehicle VIN: {vehicle_vin}")
+                vehicle_id = None
+        
         # Read binary protobuf data
         data = await request.body()
         
@@ -211,13 +225,14 @@ async def receive_telemetry(request: Request):
             telemetry_buffer.pop(0)
         
         # Store in Supabase if enabled
-        if USE_SUPABASE and VEHICLE_ID:
-            supabase.insert_telemetry(VEHICLE_ID, telemetry_dict)
+        if USE_SUPABASE and vehicle_id:
+            supabase.insert_telemetry(vehicle_id, telemetry_dict)
         
         # Broadcast to all connected WebSocket clients
         await manager.broadcast({
             "type": "telemetry",
             "data": telemetry_dict,
+            "vehicle_vin": vehicle_vin[-6:],  # Last 6 chars for privacy
             "compression_stats": g_predictor.get_compression_stats()
         })
         
@@ -313,7 +328,7 @@ async def start_script():
         # Start the process with unbuffered output
         # Set SERVER_PORT env var so logger knows which port to use
         env = os.environ.copy()
-        env['SERVER_PORT'] = str(int(os.environ.get("PORT", 8000)))
+        env['SERVER_PORT'] = str(int(os.environ.get("PORT", 8001)))
         
         script_process = await asyncio.create_subprocess_exec(
             "stdbuf", "-oL", "-eL", logger_path,
@@ -402,7 +417,7 @@ async def clear_data():
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
+    port = int(os.environ.get("PORT", 8001))
     print("\n=== Tesla Telemetry Server ===")
     print(f"HTTP endpoint: http://0.0.0.0:{port}/telemetry")
     print(f"WebSocket: ws://0.0.0.0:{port}/ws")

@@ -2,6 +2,7 @@ config.py
 cache.json
 logs/
 data/tesla_raw_log.jsonl
+data/vehicle_logs/
 __pycache__/
 python_cloud/telemetry*
 cpp_edge/telemetry*

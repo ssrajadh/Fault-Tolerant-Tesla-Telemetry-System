@@ -1,8 +1,8 @@
 # Fault-Tolerant Tesla Telemetry Logger
 
-> **Status:** MVP done
+> **Status:** Production-ready with multi-vehicle fleet support
 
-A high-performance C++ telemetry engine designed to capture, buffer, and synchronize vehicle data (Tesla Model 3) during intermittent network connectivity. Unlike standard cloud-based loggers that lose data in tunnels or rural dead zones, this logger utilizes a **Store-and-Forward** architecture to ensure 100% data continuity.
+A high-performance C++ telemetry engine designed to capture, buffer, and synchronize vehicle data from multiple Tesla vehicles during intermittent network connectivity. Unlike standard cloud-based loggers that lose data in tunnels or rural dead zones, this logger utilizes a **Store-and-Forward** architecture to ensure 100% data continuity.
 
 ## The Problem
 Standard vehicle telemetry loggers (e.g., TeslaFi, Tessie) rely on continuous API polling. If the vehicle drives into a "dead zone" (parking garage, tunnel, remote highway), the connection is severed, and telemetry data for that period is lost forever.
@@ -12,6 +12,7 @@ This logger runs as an embedded service on the edge (simulated on Linux). It imp
 1.  **Ingestion:** Reads high-frequency CAN-bus signals (50Hz) via a replay harness.
 2.  **Buffering:** If the network is detected as "Offline," data is serialized via **Protocol Buffers** and written atomically to a local **SQLite** database.
 3.  **Recovery:** A background worker thread detects network restoration and prioritizes uploading the oldest buffered records first, preserving the timeline integrity.
+4.  **Multi-Vehicle:** Supports concurrent telemetry streams from multiple vehicles with VIN-based routing.
 
 ## Architecture
 ```mermaid
@@ -22,6 +23,8 @@ graph LR
     C -- Online --> E[Protobuf Serializer]
     D -->|Sync Worker| E
     E -->|Binary Stream| F[Python Cloud Server]
+    F --> G[Supabase PostgreSQL]
+    F --> H[React Dashboard]
 ```
 
 ## Tech Stack
@@ -29,10 +32,19 @@ graph LR
 * **Serialization:** Protocol Buffers (Google Protobuf)
 * **Persistence:** SQLite (WAL mode for concurrent writes)
 * **Backend:** Python (FastAPI with WebSocket support)
+* **Database:** Supabase PostgreSQL (free tier, multi-vehicle support)
 * **Frontend:** React 18 + TypeScript (Real-time dashboard with Recharts)
+* **Infrastructure:** Terraform + Google Cloud Run (serverless deployment)
 * **Simulation:** Hardware-in-the-loop replay using real Tesla Model 3 drive logs.
 
 ## Features
+
+### 🚗 Multi-Vehicle Fleet Support (NEW)
+- **5-Vehicle Simulation**: Concurrent telemetry from Model 3, Model Y, Model S Plaid, and Model X
+- **VIN-Based Routing**: Each vehicle identified by VIN, stored separately in database
+- **Independent State**: Per-vehicle compression predictors and offline buffers
+- **Varied Data**: Realistic variations in speed, power, battery, and heading per vehicle type
+- **Fleet Orchestration**: Run entire fleet with single command (`./run_fleet.sh`)
 
 ### Smart Compression Engine
 - **Predictive Compression**: Exponential smoothing algorithm predicts next telemetry values
@@ -104,7 +116,3 @@ predicted_value = 0.3 × actual_current + 0.7 × predicted_previous
   - Horizontal pod autoscaling for logger fleet management
   - StatefulSets for SQLite buffer persistence
   - Helm charts for configuration management
-- **Terraform Infrastructure**: 
-  - Infrastructure-as-code for GCP resources (Cloud Run, Cloud SQL, Cloud Storage)
-  - Multi-region deployment with traffic routing
-  - Automated CI/CD pipelines with Cloud Build

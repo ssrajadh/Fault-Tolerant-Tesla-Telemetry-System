@@ -23,6 +23,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy protobuf schema
 COPY telemetry.proto .
 
+# Copy database module (Supabase client)
+COPY database/ ./database/
+
 # Copy Python server code first
 COPY python_cloud/ ./python_cloud/
 
