@@ -8,7 +8,7 @@
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #1e3a8a 0%, #0f172a 100%);
   color: white;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
     'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
@@ -489,7 +489,7 @@
 .mobile-toggle-button {
   display: none; /* Hidden by default on desktop */
   padding: 6px 12px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #1e3a8a 0%, #0f172a 100%);
   border: none;
   border-radius: 6px;
   color: white;
@@ -503,7 +503,7 @@
 
 .mobile-toggle-button:hover:not(:disabled) {
   transform: scale(1.05);
-  box-shadow: 0 4px 8px rgba(102, 126, 234, 0.4);
+  box-shadow: 0 4px 8px rgba(30, 58, 138, 0.4);
 }
 
 .mobile-toggle-button:disabled {
@@ -526,7 +526,7 @@
 }
 
 .value-card {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #1e3a8a 0%, #0f172a 100%);
   color: white;
   padding: 0.8rem;
   border-radius: 10px;
@@ -729,7 +729,7 @@
   align-items: center;
   padding: 1.5rem 2rem;
   border-bottom: 2px solid #f0f0f0;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #1e3a8a 0%, #0f172a 100%);
   color: white;
   border-radius: 12px 12px 0 0;
 }
@@ -772,7 +772,7 @@
 }
 
 .modal-body h3 {
-  color: #667eea;
+  color: #3b82f6;
   margin-bottom: 0.5rem;
   font-size: 1.2rem;
 }
