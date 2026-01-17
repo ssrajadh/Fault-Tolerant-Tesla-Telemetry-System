@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telemetry-frontend
+  namespace: default
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: telemetry-frontend
+  template:
+    metadata:
+      labels:
+        app: telemetry-frontend
+    spec:
+      containers:
+      - name: frontend
+        image: tesla-telemetry-frontend:latest 
+        ports:
+        - containerPort: 3000
+          name: http
+        env:
+        - name: REACT_APP_BACKEND_URL
+          value: "http://telemetry-server:8080"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+

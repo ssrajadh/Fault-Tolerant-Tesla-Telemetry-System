@@ -9,7 +9,16 @@ import subprocess
 import asyncio
 import os
 import sys
+import threading
 from predictor import TelemetryPredictor
+
+# Kafka consumer (optional)
+try:
+    from confluent_kafka import Consumer, KafkaError, KafkaException
+    KAFKA_AVAILABLE = True
+except ImportError:
+    KAFKA_AVAILABLE = False
+    print("[KAFKA] confluent-kafka not installed, Kafka consumer disabled")
 
 # Add parent directory to path for database imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -53,6 +62,14 @@ app.add_middleware(
 # In-memory storage (simple list for demo)
 telemetry_buffer: List[dict] = []
 MAX_BUFFER_SIZE = 1000
+
+# Kafka configuration
+KAFKA_ENABLED = os.getenv("KAFKA_BOOTSTRAP_SERVERS") is not None and KAFKA_AVAILABLE
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "telemetry-raw")
+KAFKA_CONSUMER_GROUP = os.getenv("KAFKA_CONSUMER_GROUP", "telemetry-processors")
+kafka_consumer_thread = None
+kafka_consumer_running = False
 
 
 class ConnectionManager:
@@ -113,30 +130,9 @@ async def stream_script_output():
 manager = ConnectionManager()
 
 
-@app.post("/telemetry")
-async def receive_telemetry(request: Request):
-    """Receive protobuf binary data from C++ edge device (compressed or uncompressed)"""
+async def process_telemetry_data(data: bytes, vehicle_vin: str, is_compressed: bool = True):
+    """Process telemetry data (from Kafka or HTTP) and store/broadcast it"""
     try:
-        # Check if this is compressed data
-        is_compressed = request.headers.get("X-Compressed", "false") == "true"
-        
-        # Get vehicle VIN from header (for multi-vehicle support)
-        vehicle_vin = request.headers.get("X-Vehicle-VIN", "5YJ3E1EA1KF000001")
-        
-        # Lookup vehicle ID for this VIN (cache lookup)
-        vehicle_id = VEHICLE_ID  # Use default cached ID
-        if USE_SUPABASE and vehicle_vin != "5YJ3E1EA1KF000001":
-            # Lookup vehicle by VIN if not the default
-            vehicle_info = supabase.get_vehicle_by_vin(vehicle_vin)
-            if vehicle_info:
-                vehicle_id = vehicle_info['id']
-            else:
-                print(f"[WARNING] Unknown vehicle VIN: {vehicle_vin}")
-                vehicle_id = None
-        
-        # Read binary protobuf data
-        data = await request.body()
-        
         if is_compressed:
             # Parse compressed protobuf
             compressed_data = telemetry_pb2.CompressedVehicleData()
@@ -192,7 +188,7 @@ async def receive_telemetry(request: Request):
             if compressed_data.HasField('power_kw'): fields_sent.append('Power')
             if compressed_data.HasField('heading'): fields_sent.append('Heading')
             
-            log_msg = f"[COMPRESSED] Received: {', '.join(fields_sent) if fields_sent else 'No updates'}"
+            log_msg = f"[KAFKA] Received: {', '.join(fields_sent) if fields_sent else 'No updates'}"
             if compressed_data.is_resync:
                 log_msg += " [RESYNC]"
             
@@ -215,9 +211,20 @@ async def receive_telemetry(request: Request):
             }
             
             await manager.broadcast_log(
-                f"[UPLOAD] ✓ Received: Speed={vehicle_data.vehicle_speed} mph, Battery={vehicle_data.battery_level}%, Power={vehicle_data.power_kw} kW",
+                f"[KAFKA] ✓ Received: Speed={vehicle_data.vehicle_speed} mph, Battery={vehicle_data.battery_level}%, Power={vehicle_data.power_kw} kW",
                 "success"
             )
+        
+        # Lookup vehicle ID for this VIN
+        vehicle_id = VEHICLE_ID  # Use default cached ID
+        if USE_SUPABASE and vehicle_vin != "5YJ3E1EA1KF000001":
+            # Lookup vehicle by VIN if not the default
+            vehicle_info = supabase.get_vehicle_by_vin(vehicle_vin)
+            if vehicle_info:
+                vehicle_id = vehicle_info['id']
+            else:
+                print(f"[WARNING] Unknown vehicle VIN: {vehicle_vin}")
+                vehicle_id = None
         
         # Store in memory (keep last MAX_BUFFER_SIZE records)
         telemetry_buffer.append(telemetry_dict)
@@ -236,12 +243,115 @@ async def receive_telemetry(request: Request):
             "compression_stats": g_predictor.get_compression_stats()
         })
         
+        return True
+    except Exception as e:
+        print(f"[ERROR] Failed to process telemetry: {e}")
+        await manager.broadcast_log(f"[ERROR] Failed to process telemetry: {e}", "error")
+        return False
+
+
+@app.post("/telemetry")
+async def receive_telemetry(request: Request):
+    """Receive protobuf binary data from C++ edge device via HTTP (fallback when Kafka not available)"""
+    try:
+        # Check if this is compressed data
+        is_compressed = request.headers.get("X-Compressed", "false") == "true"
+        
+        # Get vehicle VIN from header (for multi-vehicle support)
+        vehicle_vin = request.headers.get("X-Vehicle-VIN", "5YJ3E1EA1KF000001")
+        
+        # Read binary protobuf data
+        data = await request.body()
+        
+        # Process using shared function
+        success = await process_telemetry_data(data, vehicle_vin, is_compressed)
+        
+        if success:
         return {"status": "ok", "records_buffered": len(telemetry_buffer)}
+        else:
+            return {"status": "error", "message": "Failed to process telemetry"}
         
     except Exception as e:
         print(f"[ERROR] Failed to process telemetry: {e}")
         await manager.broadcast_log(f"[ERROR] Failed to process telemetry: {e}", "error")
         return {"status": "error", "message": str(e)}
+
+
+def kafka_consumer_loop():
+    """Kafka consumer running in background thread"""
+    global kafka_consumer_running
+    
+    if not KAFKA_ENABLED:
+        print("[KAFKA] Consumer disabled (KAFKA_BOOTSTRAP_SERVERS not set or library not available)")
+        return
+    
+    print(f"[KAFKA] Starting consumer: brokers={KAFKA_BOOTSTRAP_SERVERS}, topic={KAFKA_TOPIC}, group={KAFKA_CONSUMER_GROUP}")
+    
+    # Create a new event loop for this thread
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    # Create consumer configuration
+    conf = {
+        'bootstrap.servers': KAFKA_BOOTSTRAP_SERVERS,
+        'group.id': KAFKA_CONSUMER_GROUP,
+        'auto.offset.reset': 'earliest',  # Start from beginning if no offset
+        'enable.auto.commit': True,
+        'auto.commit.interval.ms': 1000,
+    }
+    
+    consumer = None
+    try:
+        consumer = Consumer(conf)
+        consumer.subscribe([KAFKA_TOPIC])
+        
+        kafka_consumer_running = True
+        print(f"[KAFKA] Consumer subscribed to topic: {KAFKA_TOPIC}")
+        
+        message_count = 0
+        while kafka_consumer_running:
+            try:
+                # Poll for messages (timeout 1 second)
+                msg = consumer.poll(timeout=1.0)
+                
+                if msg is None:
+                    continue
+                
+                if msg.error():
+                    if msg.error().code() == KafkaError._PARTITION_EOF:
+                        # End of partition event - not an error
+                        continue
+                    else:
+                        print(f"[KAFKA ERROR] {msg.error()}")
+                        continue
+                
+                # Extract VIN from message key (used for partitioning)
+                vehicle_vin = msg.key().decode('utf-8') if msg.key() else "5YJ3E1EA1KF000001"
+                
+                # Get message value (protobuf binary data)
+                data = msg.value()
+                
+                # Process message asynchronously in the thread's event loop
+                loop.run_until_complete(process_telemetry_data(data, vehicle_vin, is_compressed=True))
+                
+                message_count += 1
+                if message_count % 100 == 0:
+                    print(f"[KAFKA] Processed {message_count} messages")
+                    
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                print(f"[KAFKA ERROR] Error processing message: {e}")
+                continue
+                
+    except Exception as e:
+        print(f"[KAFKA ERROR] Consumer error: {e}")
+    finally:
+        if consumer:
+            consumer.close()
+        loop.close()
+        kafka_consumer_running = False
+        print("[KAFKA] Consumer stopped")
 
 
 @app.websocket("/ws")
@@ -422,5 +532,16 @@ if __name__ == "__main__":
     print(f"HTTP endpoint: http://0.0.0.0:{port}/telemetry")
     print(f"WebSocket: ws://0.0.0.0:{port}/ws")
     print(f"Status: http://0.0.0.0:{port}/status")
-    print(f"Dashboard: http://0.0.0.0:{port}/\n")
+    print(f"Dashboard: http://0.0.0.0:{port}/")
+    
+    # Start Kafka consumer in background thread if enabled
+    if KAFKA_ENABLED:
+        print(f"\n[KAFKA] Starting Kafka consumer...")
+        kafka_consumer_thread = threading.Thread(target=kafka_consumer_loop, daemon=True)
+        kafka_consumer_thread.start()
+        print(f"[KAFKA] Consumer thread started")
+    else:
+        print(f"\n[KAFKA] Kafka consumer disabled (using HTTP endpoint)")
+    
+    print()
     uvicorn.run(app, host="0.0.0.0", port=port)

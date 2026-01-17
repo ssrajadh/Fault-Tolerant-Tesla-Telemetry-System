@@ -1,0 +1,88 @@
+{{- if .Values.frontend.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tesla-telemetry.fullname" . }}-frontend
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "tesla-telemetry.labels" . | nindent 4 }}
+    component: frontend
+spec:
+  replicas: {{ .Values.frontend.replicas }}
+  selector:
+    matchLabels:
+      {{- include "tesla-telemetry.selectorLabels" . | nindent 6 }}
+      component: frontend
+  template:
+    metadata:
+      labels:
+        {{- include "tesla-telemetry.selectorLabels" . | nindent 8 }}
+        component: frontend
+    spec:
+      containers:
+      - name: frontend
+        image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}"
+        imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
+        ports:
+        - containerPort: 3000
+          name: http
+        env:
+        - name: REACT_APP_BACKEND_URL
+          value: "http://{{ include "tesla-telemetry.fullname" . }}-server:8080"
+        resources:
+          {{- toYaml .Values.frontend.resources | nindent 10 }}
+{{- end }}
+
+---
+{{- if .Values.frontend.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tesla-telemetry.fullname" . }}-frontend
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "tesla-telemetry.labels" . | nindent 4 }}
+    component: frontend
+spec:
+  type: ClusterIP
+  ports:
+  - port: 3000
+    targetPort: 3000
+    name: http
+  selector:
+    {{- include "tesla-telemetry.selectorLabels" . | nindent 4 }}
+    component: frontend
+{{- end }}
+
+---
+{{- if and .Values.frontend.enabled .Values.frontend.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "tesla-telemetry.fullname" . }}-ingress
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "tesla-telemetry.labels" . | nindent 4 }}
+  annotations:
+    {{- toYaml .Values.frontend.ingress.annotations | nindent 4 }}
+spec:
+  rules:
+  - host: {{ .Values.frontend.ingress.host }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: {{ include "tesla-telemetry.fullname" . }}-frontend
+            port:
+              number: 3000
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: {{ include "tesla-telemetry.fullname" . }}-server
+            port:
+              number: 8080
+{{- end }}
+

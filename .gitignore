@@ -46,6 +46,10 @@ terraform/*_override.tf.json
 .env.local
 .env.*.local
 
+# Helm values with secrets (if updated from .env)
+helm/tesla-telemetry/values.yaml
+!helm/tesla-telemetry/values.yaml.example
+
 frontend_dashboard/npm-debug.log*
 frontend_dashboard/yarn-debug.log*
 frontend_dashboard/yarn-error.log*

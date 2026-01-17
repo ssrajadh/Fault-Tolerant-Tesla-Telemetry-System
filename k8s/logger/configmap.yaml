@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vehicle-vins
+  namespace: default
+data:
+  vin-0: "5YJ3E1EA1KF000001"  # Model 3 Long Range
+  vin-1: "5YJ3E1EA2KF000002"  # Model Y Performance
+  vin-2: "5YJSA1E26MF000003"  # Model S Plaid
+  vin-3: "7SAYGDEE3MF000004"  # Model X Long Range
+  vin-4: "5YJ3E1EB9MF000005"  # Model 3 Standard Range
+

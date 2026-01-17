@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     libcurl4-openssl-dev \
     libsqlite3-dev \
     nlohmann-json3-dev \
+    librdkafka-dev \
     curl \
     coreutils \
     && rm -rf /var/lib/apt/lists/*
@@ -38,10 +39,10 @@ COPY cpp_edge/ ./cpp_edge/
 # Compile protobuf for C++ 
 RUN protoc --cpp_out=cpp_edge telemetry.proto
 
-# Compile C++ logger
+# Compile C++ logger (with Kafka support)
 RUN cd cpp_edge && \
     g++ -std=c++17 -o logger logger.cpp telemetry.pb.cc \
-    -lprotobuf -lcurl -lsqlite3
+    -lprotobuf -lcurl -lsqlite3 -lrdkafka
 
 # Copy data files (includes Tesla logs)
 COPY data/ ./data/

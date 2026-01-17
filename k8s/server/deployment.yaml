@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telemetry-server
+  namespace: default
+spec:
+  replicas: 2  # Start with 2, HPA will scale
+  selector:
+    matchLabels:
+      app: telemetry-server
+  template:
+    metadata:
+      labels:
+        app: telemetry-server
+    spec:
+      containers:
+      - name: server
+        image: tesla-telemetry-backend:latest  # Update with your image
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: PORT
+          valueFrom:
+            configMapKeyRef:
+              name: telemetry-config
+              key: PORT
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "kafka:9093"
+        - name: KAFKA_TOPIC
+          valueFrom:
+            configMapKeyRef:
+              name: telemetry-config
+              key: KAFKA_TOPIC
+        - name: KAFKA_CONSUMER_GROUP
+          valueFrom:
+            configMapKeyRef:
+              name: telemetry-config
+              key: KAFKA_CONSUMER_GROUP
+        - name: ENABLE_SUPABASE
+          valueFrom:
+            configMapKeyRef:
+              name: telemetry-config
+              key: ENABLE_SUPABASE
+        envFrom:
+        - secretRef:
+            name: telemetry-secrets
+        volumeMounts:
+        - name: data
+          mountPath: /app/data
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /status
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /status
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: telemetry-data-shared
+

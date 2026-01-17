@@ -9,6 +9,7 @@
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
 #include <sqlite3.h>
+#include <librdkafka/rdkafka.h>
 #include "telemetry.pb.h"
 
 using json = nlohmann::json;
@@ -134,6 +135,132 @@ public:
 
 // Global predictor instance
 TelemetryPredictor g_predictor;
+
+// ============================================================================
+// Kafka Producer
+// ============================================================================
+
+class KafkaProducer {
+private:
+    rd_kafka_t* producer;
+    rd_kafka_topic_t* topic;
+    std::string topic_name;
+    bool enabled;
+    
+    // Hash function for VIN-based partitioning
+    int32_t hashVIN(const std::string& vin) {
+        std::hash<std::string> hasher;
+        size_t hash = hasher(vin);
+        // Use modulo to ensure partition is within valid range (0-4 for 5 partitions)
+        return static_cast<int32_t>(hash % 5);
+    }
+    
+public:
+    KafkaProducer() : producer(nullptr), topic(nullptr), enabled(false) {
+        // Check if Kafka is enabled via environment variable
+        const char* kafka_brokers = std::getenv("KAFKA_BOOTSTRAP_SERVERS");
+        if (!kafka_brokers) {
+            std::cout << "[KAFKA] Not configured (KAFKA_BOOTSTRAP_SERVERS not set), using HTTP fallback" << std::endl;
+            return;
+        }
+        
+        // Get topic name from environment or use default
+        const char* topic_env = std::getenv("KAFKA_TOPIC");
+        topic_name = topic_env ? topic_env : "telemetry-raw";
+        
+        // Create Kafka configuration
+        char errstr[512];
+        rd_kafka_conf_t* conf = rd_kafka_conf_new();
+        
+        // Set bootstrap servers
+        if (rd_kafka_conf_set(conf, "bootstrap.servers", kafka_brokers, errstr, sizeof(errstr)) != RD_KAFKA_CONF_OK) {
+            std::cerr << "[KAFKA ERROR] Failed to set bootstrap.servers: " << errstr << std::endl;
+            rd_kafka_conf_destroy(conf);
+            return;
+        }
+        
+        // Set producer configuration
+        rd_kafka_conf_set(conf, "acks", "1", nullptr, 0);  // Wait for leader acknowledgment
+        rd_kafka_conf_set(conf, "retries", "3", nullptr, 0);
+        rd_kafka_conf_set(conf, "compression.type", "snappy", nullptr, 0);
+        
+        // Create producer instance
+        producer = rd_kafka_new(RD_KAFKA_PRODUCER, conf, errstr, sizeof(errstr));
+        if (!producer) {
+            std::cerr << "[KAFKA ERROR] Failed to create producer: " << errstr << std::endl;
+            return;
+        }
+        
+        // Create topic object
+        topic = rd_kafka_topic_new(producer, topic_name.c_str(), nullptr);
+        if (!topic) {
+            std::cerr << "[KAFKA ERROR] Failed to create topic object" << std::endl;
+            rd_kafka_destroy(producer);
+            producer = nullptr;
+            return;
+        }
+        
+        enabled = true;
+        std::cout << "[KAFKA] Producer initialized: brokers=" << kafka_brokers 
+                  << ", topic=" << topic_name << std::endl;
+    }
+    
+    ~KafkaProducer() {
+        if (topic) {
+            rd_kafka_topic_destroy(topic);
+        }
+        if (producer) {
+            // Flush any pending messages
+            rd_kafka_flush(producer, 10000);  // Wait up to 10 seconds
+            rd_kafka_destroy(producer);
+        }
+    }
+    
+    bool isEnabled() const {
+        return enabled;
+    }
+    
+    bool send(const std::string& vin, const std::string& serialized_data) {
+        if (!enabled) {
+            return false;
+        }
+        
+        // Calculate partition based on VIN hash
+        int32_t partition = hashVIN(vin);
+        
+        // Send message
+        int err = rd_kafka_produce(
+            topic,
+            partition,
+            RD_KAFKA_MSG_F_COPY,  // Copy payload
+            (void*)serialized_data.data(),
+            serialized_data.size(),
+            vin.c_str(),  // Use VIN as key for partitioning
+            vin.length(),
+            nullptr  // Opaque pointer (not used)
+        );
+        
+        if (err != 0) {
+            std::cerr << "[KAFKA ERROR] Failed to produce message: " 
+                      << rd_kafka_err2str(static_cast<rd_kafka_resp_err_t>(err)) << std::endl;
+            return false;
+        }
+        
+        // Poll to handle delivery reports (non-blocking)
+        rd_kafka_poll(producer, 0);
+        
+        return true;
+    }
+    
+    void flush() {
+        if (enabled && producer) {
+            rd_kafka_flush(producer, 10000);
+        }
+    }
+};
+
+// Global Kafka producer instance
+KafkaProducer* g_kafka_producer = nullptr;
 
 // ============================================================================
 // Server and Database Functions
@@ -269,8 +396,28 @@ bool uploadToServer(const std::string& serialized_data, const tesla::VehicleData
     return success;
 }
 
-// Upload compressed data to server via HTTP POST
+// Upload compressed data to server via Kafka (preferred) or HTTP (fallback)
 bool uploadCompressedToServer(const std::string& serialized_data, const tesla::CompressedVehicleData& data) {
+    // Try Kafka first if enabled
+    if (g_kafka_producer && g_kafka_producer->isEnabled()) {
+        if (g_kafka_producer->send(g_vehicle_vin, serialized_data)) {
+            std::cout << "[KAFKA] ✓ Sent: VIN=" << g_vehicle_vin.substr(g_vehicle_vin.length() - 6)
+                      << " Time=" << data.timestamp()
+                      << ", Odometer=" << data.odometer() << " mi"
+                      << (data.has_vehicle_speed() ? " +Speed" : "")
+                      << (data.has_battery_level() ? " +Battery" : "")
+                      << (data.has_power_kw() ? " +Power" : "")
+                      << (data.has_heading() ? " +Heading" : "")
+                      << (data.is_resync() ? " [RESYNC]" : "")
+                      << std::endl;
+            return true;
+        } else {
+            std::cerr << "[KAFKA ERROR] Failed to send, falling back to HTTP" << std::endl;
+            // Fall through to HTTP fallback
+        }
+    }
+    
+    // HTTP fallback (when Kafka is not enabled or fails)
     CURL* curl = curl_easy_init();
     if (!curl) {
         std::cerr << "[UPLOAD ERROR] Failed to initialize curl" << std::endl;
@@ -297,7 +444,7 @@ bool uploadCompressedToServer(const std::string& serialized_data, const tesla::C
     
     bool success = (res == CURLE_OK);
     if (success) {
-        std::cout << "[UPLOAD COMPRESSED] ✓ Sent: VIN=" << g_vehicle_vin.substr(g_vehicle_vin.length() - 6)
+        std::cout << "[HTTP] ✓ Sent: VIN=" << g_vehicle_vin.substr(g_vehicle_vin.length() - 6)
                   << " Time=" << data.timestamp()
                   << ", Odometer=" << data.odometer() << " mi"
                   << (data.has_vehicle_speed() ? " +Speed" : "")
@@ -374,6 +521,9 @@ int main(int argc, char* argv[]) {
     // Verify that the version of the library that we linked against is
     // compatible with the version of the headers we compiled against.
     GOOGLE_PROTOBUF_VERIFY_VERSION;
+    
+    // Initialize Kafka producer
+    g_kafka_producer = new KafkaProducer();
     
     // Read vehicle VIN from environment variable or command line argument
     const char* vin_env = std::getenv("VEHICLE_VIN");
@@ -571,6 +721,11 @@ int main(int argc, char* argv[]) {
     g_predictor.printStats();  // Print final compression statistics
     
     // Cleanup
+    if (g_kafka_producer) {
+        g_kafka_producer->flush();
+        delete g_kafka_producer;
+        g_kafka_producer = nullptr;
+    }
     sqlite3_close(db);
     file.close();
     google::protobuf::ShutdownProtobufLibrary();

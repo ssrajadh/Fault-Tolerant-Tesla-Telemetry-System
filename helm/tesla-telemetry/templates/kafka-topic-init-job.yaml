@@ -1,0 +1,35 @@
+{{- if .Values.kafka.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "tesla-telemetry.fullname" . }}-kafka-topic-init
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "tesla-telemetry.labels" . | nindent 4 }}
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: kafka-init
+        image: confluentinc/cp-kafka:7.5.0
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Waiting for Kafka to be ready..."
+          cub kafka-ready -b {{ include "tesla-telemetry.fullname" . }}-kafka:9093 1 30
+          
+          echo "Creating telemetry-raw topic..."
+          kafka-topics --create --if-not-exists \
+            --bootstrap-server {{ include "tesla-telemetry.fullname" . }}-kafka:9093 \
+            --topic {{ .Values.config.kafka.topic }} \
+            --partitions 5 \
+            --replication-factor 1 \
+            --config retention.ms=604800000 \
+            --config segment.ms=86400000
+          
+          echo "Kafka topics initialized"
+          kafka-topics --list --bootstrap-server {{ include "tesla-telemetry.fullname" . }}-kafka:9093
+{{- end }}
+

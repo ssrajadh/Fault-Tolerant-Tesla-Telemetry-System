@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "tesla-telemetry.fullname" . }}-data-shared
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "tesla-telemetry.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi
+  # Note: ReadWriteMany requires a storage class that supports it
+  # For local dev, you may need to adjust this
+

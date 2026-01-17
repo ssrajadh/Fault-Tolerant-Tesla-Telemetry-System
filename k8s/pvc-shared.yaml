@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: telemetry-data-shared
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteMany  # For shared data access
+  resources:
+    requests:
+      storage: 5Gi
+  # Note: ReadWriteMany requires a storage class that supports it (e.g., NFS, CephFS)
+  # For local dev, you may need to use ReadWriteOnce and mount differently
+

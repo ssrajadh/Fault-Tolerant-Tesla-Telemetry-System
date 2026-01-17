@@ -1,6 +1,81 @@
 version: '3.8'
 
+networks:
+  default:
+    driver: bridge
+
 services:
+  # Zookeeper for Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: telemetry-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_logs:/var/lib/zookeeper/log
+
+  # Kafka Broker
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: telemetry-kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 5
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+
+  # Kafka Topic Initializer (creates topics on startup)
+  kafka-init:
+    image: confluentinc/cp-kafka:7.5.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      "
+      # Wait for Kafka to be ready
+      echo 'Waiting for Kafka to be ready...'
+      cub kafka-ready -b kafka:9093 1 30
+      
+      # Create telemetry-raw topic with 5 partitions (one per vehicle)
+      echo 'Creating telemetry-raw topic...'
+      kafka-topics --create --if-not-exists \
+        --bootstrap-server kafka:9093 \
+        --topic telemetry-raw \
+        --partitions 5 \
+        --replication-factor 1 \
+        --config retention.ms=604800000 \
+        --config segment.ms=86400000
+      
+      echo 'Kafka topics initialized'
+      "
+
   # PostgreSQL Database (optional local dev, use Supabase for prod)
   postgres:
     image: postgres:15-alpine
@@ -33,9 +108,16 @@ services:
       - DATABASE_URL=postgresql://telemetry_app:dev_password@postgres:5432/telemetry
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_KEY=${SUPABASE_KEY}
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9093
+      - KAFKA_TOPIC=telemetry-raw
+      - KAFKA_CONSUMER_GROUP=telemetry-processors
     depends_on:
       postgres:
         condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    networks:
+      - default
     volumes:
       - ./python_cloud:/app/python_cloud
       - ./cpp_edge:/app/cpp_edge
@@ -43,3 +125,6 @@ services:
 
 volumes:
   postgres_data:
+  zookeeper_data:
+  zookeeper_logs:
+  kafka_data:

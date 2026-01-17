@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: telemetry-config
+  namespace: default
+data:
+  KAFKA_TOPIC: "telemetry-raw"
+  KAFKA_CONSUMER_GROUP: "telemetry-processors"
+  PORT: "8080"
+  ENABLE_SUPABASE: "true"
+  # Add other non-sensitive configuration here
+

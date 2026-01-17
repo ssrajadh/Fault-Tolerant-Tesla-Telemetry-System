@@ -1,0 +1,95 @@
+{{- if .Values.kafka.enabled }}
+# Note: For production, consider using Bitnami Kafka chart as a dependency
+# This is a simplified standalone Kafka deployment
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "tesla-telemetry.fullname" . }}-kafka
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "tesla-telemetry.labels" . | nindent 4 }}
+    component: kafka
+spec:
+  serviceName: {{ include "tesla-telemetry.fullname" . }}-kafka
+  replicas: {{ .Values.kafka.replicas }}
+  selector:
+    matchLabels:
+      {{- include "tesla-telemetry.selectorLabels" . | nindent 6 }}
+      component: kafka
+  template:
+    metadata:
+      labels:
+        {{- include "tesla-telemetry.selectorLabels" . | nindent 8 }}
+        component: kafka
+    spec:
+      containers:
+      - name: kafka
+        image: confluentinc/cp-kafka:7.5.0
+        ports:
+        - containerPort: 9092
+          name: external
+        - containerPort: 9093
+          name: internal
+        env:
+        - name: KAFKA_BROKER_ID
+          value: "1"
+        - name: KAFKA_ZOOKEEPER_CONNECT
+          value: "{{ include "tesla-telemetry.fullname" . }}-zookeeper:2181"
+        - name: KAFKA_ADVERTISED_LISTENERS
+          value: "PLAINTEXT://{{ include "tesla-telemetry.fullname" . }}-kafka:9092,PLAINTEXT_INTERNAL://{{ include "tesla-telemetry.fullname" . }}-kafka:9093"
+        - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+          value: "PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT"
+        - name: KAFKA_INTER_BROKER_LISTENER_NAME
+          value: "PLAINTEXT_INTERNAL"
+        - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+          value: "1"
+        - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
+          value: "true"
+        - name: KAFKA_NUM_PARTITIONS
+          value: "5"
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/kafka/data
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+  {{- if .Values.kafka.persistence.enabled }}
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: {{ .Values.kafka.persistence.size }}
+  {{- end }}
+{{- end }}
+
+---
+{{- if .Values.kafka.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tesla-telemetry.fullname" . }}-kafka
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "tesla-telemetry.labels" . | nindent 4 }}
+    component: kafka
+spec:
+  type: ClusterIP
+  ports:
+  - port: 9092
+    targetPort: 9092
+    name: external
+  - port: 9093
+    targetPort: 9093
+    name: internal
+  selector:
+    {{- include "tesla-telemetry.selectorLabels" . | nindent 4 }}
+    component: kafka
+{{- end }}
+

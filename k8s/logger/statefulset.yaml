@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: telemetry-logger
+  namespace: default
+spec:
+  serviceName: telemetry-logger
+  replicas: 5  # One per vehicle
+  selector:
+    matchLabels:
+      app: telemetry-logger
+  template:
+    metadata:
+      labels:
+        app: telemetry-logger
+    spec:
+      initContainers:
+      - name: vin-setup
+        image: busybox:latest
+        command: ['sh', '-c']
+        args:
+        - |
+          # Extract ordinal from pod name (telemetry-logger-0 -> 0)
+          ORDINAL=$(echo $POD_NAME | sed 's/.*-//')
+          VIN=$(cat /etc/vehicle-vins/vin-$ORDINAL)
+          echo "export VEHICLE_VIN=$VIN" > /shared/vin.sh
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        volumeMounts:
+        - name: vehicle-vins
+          mountPath: /etc/vehicle-vins
+          readOnly: true
+        - name: shared
+          mountPath: /shared
+      containers:
+      - name: logger
+        image: tesla-telemetry-logger:latest 
+        command: ['/bin/sh', '-c']
+        args:
+        - |
+          source /shared/vin.sh
+          exec /app/cpp_edge/logger
+        env:
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "kafka:9093"
+        - name: KAFKA_TOPIC
+          valueFrom:
+            configMapKeyRef:
+              name: telemetry-config
+              key: KAFKA_TOPIC
+        - name: SERVER_PORT
+          value: "8001"  # HTTP fallback port
+        volumeMounts:
+        - name: sqlite-buffer
+          mountPath: /app/cpp_edge
+        - name: data
+          mountPath: /app/data
+        - name: shared
+          mountPath: /shared
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+  volumeClaimTemplates:
+  - metadata:
+      name: sqlite-buffer
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 1Gi
+  template:
+    spec:
+      volumes:
+      - name: vehicle-vins
+        configMap:
+          name: vehicle-vins
+      - name: shared
+        emptyDir: {}
+

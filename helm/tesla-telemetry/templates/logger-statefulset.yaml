@@ -1,0 +1,88 @@
+{{- if .Values.logger.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "tesla-telemetry.fullname" . }}-logger
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "tesla-telemetry.labels" . | nindent 4 }}
+    component: logger
+spec:
+  serviceName: {{ include "tesla-telemetry.fullname" . }}-logger
+  replicas: {{ .Values.logger.replicas }}
+  selector:
+    matchLabels:
+      {{- include "tesla-telemetry.selectorLabels" . | nindent 6 }}
+      component: logger
+  template:
+    metadata:
+      labels:
+        {{- include "tesla-telemetry.selectorLabels" . | nindent 8 }}
+        component: logger
+    spec:
+      initContainers:
+      - name: vin-setup
+        image: busybox:latest
+        command: ['sh', '-c']
+        args:
+        - |
+          ORDINAL=$(echo $POD_NAME | sed 's/.*-//')
+          VIN=$(cat /etc/vehicle-vins/vin-$ORDINAL)
+          echo "export VEHICLE_VIN=$VIN" > /shared/vin.sh
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        volumeMounts:
+        - name: vehicle-vins
+          mountPath: /etc/vehicle-vins
+          readOnly: true
+        - name: shared
+          mountPath: /shared
+      containers:
+      - name: logger
+        image: "{{ .Values.logger.image.repository }}:{{ .Values.logger.image.tag }}"
+        imagePullPolicy: {{ .Values.logger.image.pullPolicy }}
+        command: ['/bin/sh', '-c']
+        args:
+        - |
+          source /shared/vin.sh
+          exec /app/cpp_edge/logger
+        env:
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "{{ include "tesla-telemetry.fullname" . }}-kafka:9093"
+        - name: KAFKA_TOPIC
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "tesla-telemetry.fullname" . }}-config
+              key: KAFKA_TOPIC
+        - name: SERVER_PORT
+          value: "8001"
+        volumeMounts:
+        - name: sqlite-buffer
+          mountPath: /app/cpp_edge
+        - name: data
+          mountPath: /app/data
+        - name: shared
+          mountPath: /shared
+        resources:
+          {{- toYaml .Values.logger.resources | nindent 10 }}
+      volumes:
+      - name: vehicle-vins
+        configMap:
+          name: {{ include "tesla-telemetry.fullname" . }}-vehicle-vins
+      - name: shared
+        emptyDir: {}
+  {{- if .Values.logger.persistence.enabled }}
+  volumeClaimTemplates:
+  - metadata:
+      name: sqlite-buffer
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: {{ .Values.logger.persistence.size }}
+  {{- end }}
+{{- end }}
+
